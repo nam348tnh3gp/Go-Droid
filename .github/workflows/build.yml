@@ -11,31 +11,64 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: 'stable'
-      - run: flutter pub get
-      - run: flutter build apk --release
-      - uses: actions/upload-artifact@v4
+
+      - name: Create new Flutter project
+        run: flutter create --org com.godroid --project-name go_droid temp_project
+
+      - name: Copy app source code
+        run: |
+          rm -rf temp_project/lib
+          rm -rf temp_project/assets
+          cp -r app/lib temp_project/
+          cp -r app/assets temp_project/ 2>/dev/null || true
+          cp app/pubspec.yaml temp_project/
+          cp -r app/web temp_project/ 2>/dev/null || true
+
+      - name: Change app name to "Go Droid"
+        run: |
+          sed -i 's/Go Droid/Go Droid/g' temp_project/pubspec.yaml
+          sed -i 's/Go Droid/Go Droid/g' temp_project/android/app/src/main/AndroidManifest.xml
+          sed -i 's/Go Droid/Go Droid/g' temp_project/ios/Runner/Info.plist
+        continue-on-error: true
+
+      - name: Get dependencies
+        working-directory: temp_project
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: temp_project
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: temp_project/build/app/outputs/flutter-apk/app-release.apk
 
   build-backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.21'
+
       - name: Build Backend
-        working-directory: ./backend
+        working-directory: ./Backend
         run: |
           go mod download
           CGO_ENABLED=0 GOOS=linux go build -o go-backend .
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload Backend artifact
+        uses: actions/upload-artifact@v4
         with:
           name: backend-linux
-          path: backend/go-backend
+          path: Backend/go-backend

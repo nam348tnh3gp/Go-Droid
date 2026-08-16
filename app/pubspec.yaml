@@ -1,8 +1,31 @@
+name: go_droid
+description: "Go Droid - Trình soạn thảo và thực thi Go với tích hợp Gemini AI"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
 dependencies:
   flutter:
     sdk: flutter
+
+  # Trình soạn thảo code
   flutter_code_editor: ^0.3.0
   highlight: ^0.7.0
+
+  # Mạng và trạng thái
   http: ^1.2.0
   provider: ^6.1.1
   shared_preferences: ^2.2.2
+
+  # UI và tiện ích khác (tuỳ chọn)
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

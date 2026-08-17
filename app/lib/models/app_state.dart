@@ -1,16 +1,88 @@
 import 'package:flutter/material.dart';
+import 'tab_data.dart';
 
 class AppState extends ChangeNotifier {
-  String _backendUrl = 'http://10.0.2.2:8080'; // mặc định cho Android emulator
+  List<TabData> _tabs = [];
+  String _currentTabId = '';
+  String _backendUrl = 'http://10.0.2.2:8080';
 
+  List<TabData> get tabs => _tabs;
+  String get currentTabId => _currentTabId;
+  TabData? get currentTab {
+    try {
+      return _tabs.firstWhere((t) => t.id == _currentTabId);
+    } catch (_) {
+      return _tabs.isNotEmpty ? _tabs.first : null;
+    }
+  }
   String get backendUrl => _backendUrl;
 
-  set backendUrl(String url) {
-    _backendUrl = url;
+  static const String defaultCode = '''
+package main
+
+import "fmt"
+
+func main() {
+    fmt.Println("Hello, Go!")
+}
+''';
+
+  AppState() {
+    _tabs.add(TabData(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: 'main.go',
+      code: defaultCode,
+    ));
+    _currentTabId = _tabs.first.id;
+  }
+
+  void addNewTab({String? name, String? code}) {
+    final newTab = TabData(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name ?? 'untitled.go',
+      code: code ?? defaultCode,
+    );
+    _tabs.add(newTab);
+    _currentTabId = newTab.id;
     notifyListeners();
   }
 
-  void saveBackendUrl(String url) async {
-    // Lưu bằng shared_preferences nếu cần
+  void closeTab(String id) {
+    if (_tabs.length <= 1) return;
+    _tabs.removeWhere((t) => t.id == id);
+    if (_currentTabId == id) {
+      _currentTabId = _tabs.last.id;
+    }
+    notifyListeners();
   }
+
+  void setCurrentTab(String id) {
+    if (_currentTabId != id && _tabs.any((t) => t.id == id)) {
+      _currentTabId = id;
+      notifyListeners();
+    }
+  }
+
+  void updateCode(String id, String newCode) {
+    final tab = _tabs.firstWhere((t) => t.id == id);
+    tab.code = newCode;
+    tab.isDirty = true;
+    notifyListeners();
+  }
+
+  void setBackendUrl(String url) {
+    if (_backendUrl != url) {
+      _backendUrl = url;
+      notifyListeners();
+    }
+  }
+
+  void saveTab(String id) {
+    final tab = _tabs.firstWhere((t) => t.id == id);
+    tab.isDirty = false;
+    notifyListeners();
+  }
+
+  // Lấy code của tab hiện tại
+  String getCurrentCode() => currentTab?.code ?? '';
 }

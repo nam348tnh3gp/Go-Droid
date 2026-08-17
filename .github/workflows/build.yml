@@ -31,29 +31,28 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      # --- Tự động tăng version code (giống Build.yml) ---
       - name: Increment version code
         run: |
-          # Đọc version code hiện tại từ file (nếu có)
+          # Đọc version code từ file versioncode.txt (nếu có)
           if [ -f versioncode.txt ]; then
             VERSION_CODE=$(cat versioncode.txt | tr -d '\r')
           else
             VERSION_CODE=0
           fi
           
-          # Tăng version code lên 1
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
           
-          # Lấy version name từ pubspec.yaml
-          VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r' || echo "1.0.0")
+          # Lấy version name từ pubspec.yaml trong thư mục app
+          VERSION_NAME=$(grep 'version:' app/pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
           fi
           
-          # Tạo version mới
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
           
-          # Cập nhật pubspec.yaml
-          sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
+          # Cập nhật pubspec.yaml trong thư mục app
+          sed -i "s/version: .*/version: $NEW_VERSION/" app/pubspec.yaml
           
           # Lưu version code mới vào file
           echo $NEW_VERSION_CODE > versioncode.txt
@@ -98,7 +97,6 @@ jobs:
       - name: Fix Kotlin version
         run: |
           sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.9.22'\''/' temp_project/android/build.gradle
-          
           if ! grep -q "ext.kotlin_version" temp_project/android/build.gradle; then
             sed -i '/buildscript {/a \    ext.kotlin_version = '\''1.9.22'\''' temp_project/android/build.gradle
           fi
@@ -134,12 +132,10 @@ jobs:
         run: |
           cd temp_project/android/app
           echo "$KEYSTORE_BASE64" | base64 -d > upload-keystore.jks
-          
           if [ ! -s upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
-          
           echo "✅ Keystore restored"
           echo "📏 Keystore size: $(wc -c < upload-keystore.jks) bytes"
 
@@ -296,8 +292,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pubspec.yaml versioncode.txt
-          git commit -m "Bump version to $(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
+          git add app/pubspec.yaml versioncode.txt
+          git commit -m "Bump version to $(grep 'version:' app/pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
           git push
 
   build-backend:

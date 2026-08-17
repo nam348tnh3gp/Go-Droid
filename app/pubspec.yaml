@@ -19,6 +19,11 @@ dependencies:
   provider: ^6.1.1
   shared_preferences: ^2.2.2
 
+  # Lưu / chia sẻ / nhập file
+  path_provider: ^2.1.3
+  share_plus: ^9.0.0
+  file_picker: ^8.0.0+1
+
   # UI và tiện ích khác (tuỳ chọn)
   cupertino_icons: ^1.0.6
 

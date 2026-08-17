@@ -19,6 +19,12 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -58,6 +64,16 @@ jobs:
           sed -i 's/<string>.*<\/string>/<string>Go Droid<\/string>/' temp_project/ios/Runner/Info.plist 2>/dev/null || true
           echo "✅ App name changed to 'Go Droid'"
 
+      - name: Fix Kotlin version
+        run: |
+          # Cập nhật Kotlin version trong build.gradle
+          sed -i 's/ext.kotlin_version = .*/ext.kotlin_version = '\''1.9.22'\''/' temp_project/android/build.gradle
+          
+          # Nếu chưa có dòng này, thêm vào
+          if ! grep -q "ext.kotlin_version" temp_project/android/build.gradle; then
+            sed -i '/buildscript {/a \    ext.kotlin_version = '\''1.9.22'\''' temp_project/android/build.gradle
+          fi
+
       - name: Add Internet permission
         run: |
           MANIFEST="temp_project/android/app/src/main/AndroidManifest.xml"
@@ -88,12 +104,15 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           cd temp_project/android/app
-          echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > upload-keystore.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > upload-keystore.jks
+          
           if [ ! -s upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
+          
           echo "✅ Keystore restored"
+          echo "📏 Keystore size: $(wc -c < upload-keystore.jks) bytes"
 
       - name: Create key.properties
         env:
@@ -183,6 +202,44 @@ jobs:
           dependencies {}
           EOF
           echo "✅ build.gradle overridden with signing config"
+
+      - name: Update root build.gradle Kotlin version
+        run: |
+          cd temp_project/android
+          cat > build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.22'
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.3.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.buildDir = '../build'
+          subprojects {
+              project.buildDir = "${rootProject.buildDir}/${project.name}"
+          }
+          subprojects {
+              project.evaluationDependsOn(':app')
+          }
+
+          tasks.register("clean", Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+          echo "✅ Root build.gradle updated"
 
       - name: Get dependencies
         working-directory: temp_project

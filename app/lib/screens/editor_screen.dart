@@ -124,24 +124,6 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  /// AI backends often wrap generated code in a markdown fence, e.g.:
-  ///   ```go
-  ///   package main
-  ///   ...
-  ///   ```
-  /// This strips the fence (with or without a language tag) plus any
-  /// leading/trailing blank lines, leaving just the raw source.
-  String _stripCodeFence(String raw) {
-    var text = raw.trim();
-    final fenceMatch = RegExp(
-      r'^```[a-zA-Z0-9_+-]*\s*\n([\s\S]*?)\n?```$',
-    ).firstMatch(text);
-    if (fenceMatch != null) {
-      text = fenceMatch.group(1) ?? text;
-    }
-    return text.trim();
-  }
-
   Future<void> _handleCloseTab(TabData tab) async {
     final appState = context.read<AppState>();
     if (!tab.isDirty) {

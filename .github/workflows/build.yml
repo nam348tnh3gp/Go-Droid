@@ -41,7 +41,7 @@ jobs:
         run: |
           # Đổi tên trong pubspec.yaml
           sed -i 's/name:.*/name: go_droid/' temp_project/pubspec.yaml
-          sed -i 's/description:.*/description: "Go Droid - Trình soạn thảo v\u00e0 th\u1ef1c thi Go v\u1edbi t\u00edch h\u1ee3p Gemini AI"/' temp_project/pubspec.yaml
+          sed -i 's/description:.*/description: "Go Droid - Trình soạn thảo và thực thi Go với tích hợp Gemini AI"/' temp_project/pubspec.yaml
           
           # Đổi tên trong AndroidManifest.xml
           sed -i 's/android:label=".*"/android:label="Go Droid"/' temp_project/android/app/src/main/AndroidManifest.xml
@@ -52,11 +52,11 @@ jobs:
           else
             mkdir -p temp_project/android/app/src/main/res/values
             cat > temp_project/android/app/src/main/res/values/strings.xml << 'EOF'
-            <?xml version="1.0" encoding="utf-8"?>
-            <resources>
-                <string name="app_name">Go Droid</string>
-            </resources>
-            EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Go Droid</string>
+          </resources>
+          EOF
           fi
           
           # Đổi tên trong iOS Info.plist

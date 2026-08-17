@@ -122,6 +122,21 @@ jobs:
       - name: Configure signing in build.gradle
         run: |
           cd temp_project/android/app
+          
+          # Thêm keystore properties SAU plugins {} block
+          sed -i '/^plugins {/,/^}/!b' build.gradle
+          
+          # Thêm keystore properties ngay sau plugins {}
+          sed -i '/^plugins {/,/^}/ {
+            /^}/ a\
+            def keystoreProperties = new Properties()\
+            def keystorePropertiesFile = rootProject.file("key.properties")\
+            if (keystorePropertiesFile.exists()) {\
+                keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\
+            }\
+            
+          }' build.gradle
+          
           # Thêm signingConfigs nếu chưa có
           if ! grep -q "signingConfigs" build.gradle; then
             sed -i '/android {/a \    signingConfigs {\n        release {\n            keyAlias keystoreProperties.keyAlias\n            keyPassword keystoreProperties.keyPassword\n            storeFile file(keystoreProperties.storeFile)\n            storePassword keystoreProperties.storePassword\n        }\n    }' build.gradle
@@ -130,11 +145,6 @@ jobs:
           # Thêm signingConfig vào release build
           if ! grep -q "signingConfig signingConfigs.release" build.gradle; then
             sed -i '/release {/a \            signingConfig signingConfigs.release' build.gradle
-          fi
-          
-          # Thêm keystore properties vào đầu file
-          if ! grep -q "def keystoreProperties" build.gradle; then
-            sed -i '1i def keystoreProperties = new Properties()\ndef keystorePropertiesFile = rootProject.file("key.properties")\nif (keystorePropertiesFile.exists()) {\n    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n}\n' build.gradle
           fi
 
       - name: Get dependencies

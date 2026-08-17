@@ -31,10 +31,8 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
-      # --- Tự động tăng version code (giống Build.yml) ---
       - name: Increment version code
         run: |
-          # Đọc version code từ file versioncode.txt (nếu có)
           if [ -f versioncode.txt ]; then
             VERSION_CODE=$(cat versioncode.txt | tr -d '\r')
           else
@@ -43,7 +41,6 @@ jobs:
           
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
           
-          # Lấy version name từ pubspec.yaml trong thư mục app
           VERSION_NAME=$(grep 'version:' app/pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
           if [ -z "$VERSION_NAME" ]; then
             VERSION_NAME="1.0.0"
@@ -51,10 +48,8 @@ jobs:
           
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
           
-          # Cập nhật pubspec.yaml trong thư mục app
           sed -i "s/version: .*/version: $NEW_VERSION/" app/pubspec.yaml
           
-          # Lưu version code mới vào file
           echo $NEW_VERSION_CODE > versioncode.txt
           
           echo "✅ Version set to: $NEW_VERSION"
@@ -157,7 +152,8 @@ jobs:
       - name: Override build.gradle with correct signing config
         run: |
           cd temp_project/android/app
-          cat > build.gradle << 'EOF'
+          # Dùng heredoc không có dấu nháy để mở rộng biến
+          cat > build.gradle << EOF
           plugins {
               id "com.android.application"
               id "kotlin-android"

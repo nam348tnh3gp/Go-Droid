@@ -31,6 +31,37 @@ jobs:
           flutter-version: '3.22.0'
           channel: 'stable'
 
+      - name: Increment version code
+        run: |
+          # Lấy version code hiện tại từ file versioncode.txt
+          if [ -f versioncode.txt ]; then
+            VERSION_CODE=$(cat versioncode.txt | tr -d '\r')
+          else
+            VERSION_CODE=0
+          fi
+          
+          # Tăng version code lên 1
+          NEW_VERSION_CODE=$((VERSION_CODE + 1))
+          
+          # Lấy version name từ pubspec.yaml
+          VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
+          if [ -z "$VERSION_NAME" ]; then
+            VERSION_NAME="1.0.0"
+          fi
+          
+          # Tạo version mới
+          NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
+          
+          # Cập nhật pubspec.yaml
+          sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
+          
+          # Lưu version code mới
+          echo $NEW_VERSION_CODE > versioncode.txt
+          
+          echo "✅ Version set to: $NEW_VERSION"
+          echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
+          echo "VERSION_CODE=$NEW_VERSION_CODE" >> $GITHUB_ENV
+
       - name: Create new Flutter project
         run: flutter create --org com.godroid --project-name go_droid temp_project
 
@@ -167,8 +198,8 @@ jobs:
                   applicationId "com.godroid.go_droid"
                   minSdkVersion 21
                   targetSdkVersion 34
-                  versionCode 1
-                  versionName "1.0.0"
+                  versionCode ${VERSION_CODE}
+                  versionName "${VERSION_NAME}"
               }
 
               signingConfigs {
@@ -261,6 +292,15 @@ jobs:
         with:
           name: go-droid-app-release
           path: temp_project/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Commit version changes
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml versioncode.txt
+          git commit -m "Bump version to $(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
+          git push
 
   build-backend:
     runs-on: ubuntu-latest

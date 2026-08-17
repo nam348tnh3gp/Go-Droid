@@ -53,18 +53,26 @@ class _CodeEditorState extends State<CodeEditor> {
         borderRadius: BorderRadius.circular(12),
       ),
       clipBehavior: Clip.antiAlias,
-      child: CodeField(
-        controller: _controller,
-        wrap: true,
-        textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.4),
-        padding: const EdgeInsets.all(12),
-        lineNumberStyle: LineNumberStyle(
-          margin: 12,
-          width: 36,
-          textStyle: TextStyle(color: theme.colorScheme.outline),
+      // BUG FIX: CodeField sizes itself to the full height of the code and
+      // relies on an ancestor scroll view for vertical scrolling — it only
+      // manages horizontal scrolling internally (for long lines). Without
+      // this wrapper, content taller than the box just overflowed and only
+      // the horizontal drag worked.
+      child: SingleChildScrollView(
+        child: CodeField(
+          controller: _controller,
+          minLines: null,
+          wrap: true,
+          textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.4),
+          padding: const EdgeInsets.all(12),
+          lineNumberStyle: LineNumberStyle(
+            margin: 12,
+            width: 36,
+            textStyle: TextStyle(color: theme.colorScheme.outline),
+          ),
+          cursorColor: theme.colorScheme.primary,
+          background: theme.colorScheme.surfaceContainerLow,
         ),
-        cursorColor: theme.colorScheme.primary,
-        background: theme.colorScheme.surfaceContainerLow,
       ),
     );
   }

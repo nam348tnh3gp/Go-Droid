@@ -33,27 +33,25 @@ jobs:
 
       - name: Increment version code
         run: |
-          # Lấy version code hiện tại từ file versioncode.txt
+          # Đọc version từ app/pubspec.yaml
+          if [ -f app/pubspec.yaml ]; then
+            VERSION_NAME=$(grep 'version:' app/pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
+          else
+            VERSION_NAME="1.0.0"
+          fi
+          
+          # Đọc version code từ file versioncode.txt (nếu có)
           if [ -f versioncode.txt ]; then
             VERSION_CODE=$(cat versioncode.txt | tr -d '\r')
           else
             VERSION_CODE=0
           fi
           
-          # Tăng version code lên 1
           NEW_VERSION_CODE=$((VERSION_CODE + 1))
-          
-          # Lấy version name từ pubspec.yaml
-          VERSION_NAME=$(grep 'version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '\r')
-          if [ -z "$VERSION_NAME" ]; then
-            VERSION_NAME="1.0.0"
-          fi
-          
-          # Tạo version mới
           NEW_VERSION="${VERSION_NAME}+${NEW_VERSION_CODE}"
           
-          # Cập nhật pubspec.yaml
-          sed -i "s/version: .*/version: $NEW_VERSION/" pubspec.yaml
+          # Cập nhật version trong app/pubspec.yaml
+          sed -i "s/version: .*/version: $NEW_VERSION/" app/pubspec.yaml
           
           # Lưu version code mới
           echo $NEW_VERSION_CODE > versioncode.txt
@@ -161,6 +159,9 @@ jobs:
           echo "✅ key.properties created"
 
       - name: Override build.gradle with correct signing config
+        env:
+          VERSION_NAME: ${{ env.VERSION_NAME }}
+          VERSION_CODE: ${{ env.VERSION_CODE }}
         run: |
           cd temp_project/android/app
           cat > build.gradle << 'EOF'
@@ -298,8 +299,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pubspec.yaml versioncode.txt
-          git commit -m "Bump version to $(grep 'version:' pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
+          git add app/pubspec.yaml versioncode.txt
+          git commit -m "Bump version to $(grep 'version:' app/pubspec.yaml | sed 's/version: //' | tr -d '\r') [skip ci]" || echo "No changes to commit"
           git push
 
   build-backend:

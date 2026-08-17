@@ -25,13 +25,17 @@ class CodeEditor extends StatelessWidget {
         border: Border.all(color: Colors.grey.shade700),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: CodeField(
-        controller: controller,
-        wrap: true,
-        textStyle: TextStyle(fontFamily: 'monospace', fontSize: 14),
-        lineNumberStyle: LineNumberStyle(
-          margin: 8,
-          textStyle: TextStyle(color: Colors.grey),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: CodeField(
+          controller: controller,
+          wrap: true,
+          textStyle: TextStyle(fontFamily: 'monospace', fontSize: 14),
+          lineNumberStyle: LineNumberStyle(
+            margin: 8,
+            textStyle: TextStyle(color: Colors.grey),
+          ),
+          cursorColor: Colors.cyanAccent, // 👈 hiển thị rõ con trỏ
         ),
       ),
     );

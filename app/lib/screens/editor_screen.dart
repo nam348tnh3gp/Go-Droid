@@ -107,6 +107,36 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  void _showRenameDialog(String tabId, String currentName) {
+    final controller = TextEditingController(text: currentName);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Đổi tên file'),
+        content: TextField(
+          controller: controller,
+          decoration: InputDecoration(labelText: 'Tên mới'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final newName = controller.text.trim();
+              if (newName.isNotEmpty) {
+                context.read<AppState>().renameTab(tabId, newName);
+              }
+              Navigator.pop(ctx);
+            },
+            child: Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final appState = context.watch<AppState>();
@@ -189,6 +219,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 final isActive = tab.id == appState.currentTabId;
                 return GestureDetector(
                   onTap: () => appState.setCurrentTab(tab.id),
+                  onDoubleTap: () => _showRenameDialog(tab.id, tab.name),
                   child: Container(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     margin: EdgeInsets.symmetric(horizontal: 2),

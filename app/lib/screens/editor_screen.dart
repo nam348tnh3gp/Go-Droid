@@ -8,6 +8,10 @@ import '../widgets/output_panel.dart';
 import '../widgets/ai_dialog.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:file_picker/file_picker.dart';
 
 class EditorScreen extends StatefulWidget {
   @override
@@ -151,10 +155,106 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  void _saveCurrentTab() {
+    final appState = context.read<AppState>();
+    final tab = appState.currentTab;
+    if (tab == null) return;
+    appState.saveTab(tab.id);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã lưu "${tab.name}"'), duration: const Duration(seconds: 1)),
+    );
+  }
+
+  Future<void> _renameTabDialog(TabData tab) async {
+    final controller = TextEditingController(text: tab.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Đổi tên file'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'Tên file',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+    if (newName != null && newName.trim().isNotEmpty && newName.trim() != tab.name) {
+      context.read<AppState>().renameTab(tab.id, newName.trim());
+    }
+  }
+
+  Future<void> _shareCode() async {
+    final tab = context.read<AppState>().currentTab;
+    if (tab == null) return;
+    try {
+      // Ghi ra file tạm rồi share dưới dạng file thật (.go) thay vì chỉ
+      // share đoạn text thô, để người nhận có thể lưu/mở file đúng định dạng.
+      final dir = await getTemporaryDirectory();
+      final file = File('${dir.path}/${tab.name}');
+      await file.writeAsString(tab.code);
+      await Share.shareXFiles([XFile(file.path)], subject: tab.name);
+    } catch (e) {
+      // Nếu không ghi được file tạm (hiếm), fallback sang share text thuần.
+      await Share.share(tab.code, subject: tab.name);
+    }
+  }
+
+  Future<void> _importFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['go', 'txt'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+    final picked = result.files.single;
+
+    String? content;
+    try {
+      if (picked.bytes != null) {
+        content = utf8.decode(picked.bytes!);
+      } else if (picked.path != null) {
+        content = await File(picked.path!).readAsString();
+      }
+    } catch (_) {
+      content = null;
+    }
+
+    if (!mounted) return;
+    if (content == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không thể đọc file đã chọn')),
+      );
+      return;
+    }
+
+    context.read<AppState>().importFile(picked.name, content);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Đã import "${picked.name}"')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final appState = context.watch<AppState>();
+
+    // Chờ khôi phục các tab đã lưu trước khi vẽ UI, để không bị "nháy"
+    // tab mặc định rồi mới thay bằng dữ liệu thật.
+    if (!appState.isLoaded) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     final currentTab = appState.currentTab;
 
     return Scaffold(
@@ -186,9 +286,69 @@ class _EditorScreenState extends State<EditorScreen> {
                   },
           ),
           IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Cài đặt backend',
-            onPressed: () => _showUrlDialog(),
+            icon: const Icon(Icons.save_outlined),
+            tooltip: 'Lưu',
+            onPressed: (currentTab != null && currentTab.isDirty && !_isBusy)
+                ? _saveCurrentTab
+                : null,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Thêm',
+            onSelected: (value) {
+              switch (value) {
+                case 'import':
+                  _importFile();
+                  break;
+                case 'share':
+                  _shareCode();
+                  break;
+                case 'rename':
+                  if (currentTab != null) _renameTabDialog(currentTab);
+                  break;
+                case 'settings':
+                  _showUrlDialog();
+                  break;
+              }
+            },
+            itemBuilder: (ctx) => [
+              const PopupMenuItem(
+                value: 'import',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.file_open_outlined),
+                  title: Text('Import file'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.share_outlined),
+                  title: Text('Chia sẻ code'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'rename',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.drive_file_rename_outline),
+                  title: Text('Đổi tên file'),
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'settings',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.settings_outlined),
+                  title: Text('Cài đặt backend'),
+                ),
+              ),
+            ],
           ),
           const SizedBox(width: 4),
         ],
@@ -214,6 +374,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       final isActive = tab.id == appState.currentTabId;
                       return GestureDetector(
                         onTap: () => appState.setCurrentTab(tab.id),
+                        onLongPress: () => _renameTabDialog(tab),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                           margin: const EdgeInsets.symmetric(horizontal: 3),

@@ -211,13 +211,28 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _importFile() async {
+    // BUG FIX: FileType.custom filters by MIME type on Android under the
+    // hood, and ".go" has no registered MIME type on the OS — so the
+    // system picker greyed those files out (only .txt worked, since
+    // text/plain is a known MIME type). Using FileType.any avoids the
+    // OS-level filter entirely; we validate the extension ourselves after
+    // the user picks, which is the approach the file_picker docs recommend
+    // for uncommon extensions.
     final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['go', 'txt'],
+      type: FileType.any,
       withData: true,
     );
     if (result == null || result.files.isEmpty) return;
     final picked = result.files.single;
+
+    final ext = picked.extension?.toLowerCase() ?? '';
+    if (ext != 'go' && ext != 'txt') {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chỉ hỗ trợ import file .go hoặc .txt')),
+      );
+      return;
+    }
 
     String? content;
     try {

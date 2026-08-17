@@ -23,4 +23,18 @@ class TabData {
       isDirty: isDirty ?? this.isDirty,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'code': code,
+        'isDirty': isDirty,
+      };
+
+  factory TabData.fromJson(Map<String, dynamic> json) => TabData(
+        id: json['id'] as String,
+        name: json['name'] as String,
+        code: json['code'] as String? ?? '',
+        isDirty: json['isDirty'] as bool? ?? false,
+      );
 }

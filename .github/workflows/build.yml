@@ -39,14 +39,10 @@ jobs:
 
       - name: Change app name to "Go Droid"
         run: |
-          # Đổi tên trong pubspec.yaml
           sed -i 's/name:.*/name: go_droid/' temp_project/pubspec.yaml
           sed -i 's/description:.*/description: "Go Droid - Trình soạn thảo và thực thi Go với tích hợp Gemini AI"/' temp_project/pubspec.yaml
-          
-          # Đổi tên trong AndroidManifest.xml
           sed -i 's/android:label=".*"/android:label="Go Droid"/' temp_project/android/app/src/main/AndroidManifest.xml
           
-          # Đổi tên trong strings.xml (nếu có)
           if [ -f "temp_project/android/app/src/main/res/values/strings.xml" ]; then
             sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">Go Droid<\/string>/' temp_project/android/app/src/main/res/values/strings.xml
           else
@@ -59,9 +55,7 @@ jobs:
           EOF
           fi
           
-          # Đổi tên trong iOS Info.plist
           sed -i 's/<string>.*<\/string>/<string>Go Droid<\/string>/' temp_project/ios/Runner/Info.plist 2>/dev/null || true
-          
           echo "✅ App name changed to 'Go Droid'"
 
       - name: Add Internet permission
@@ -95,13 +89,10 @@ jobs:
         run: |
           cd temp_project/android/app
           echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > upload-keystore.jks
-          
           if [ ! -s upload-keystore.jks ]; then
             echo "❌ Keystore file is empty!"
             exit 1
           fi
-          
-          echo "📏 Keystore size: $(wc -c < upload-keystore.jks) bytes"
           echo "✅ Keystore restored"
 
       - name: Create key.properties
@@ -119,33 +110,79 @@ jobs:
           EOF
           echo "✅ key.properties created"
 
-      - name: Configure signing in build.gradle
+      - name: Override build.gradle with correct signing config
         run: |
           cd temp_project/android/app
-          
-          # Thêm keystore properties SAU plugins {} block
-          sed -i '/^plugins {/,/^}/!b' build.gradle
-          
-          # Thêm keystore properties ngay sau plugins {}
-          sed -i '/^plugins {/,/^}/ {
-            /^}/ a\
-            def keystoreProperties = new Properties()\
-            def keystorePropertiesFile = rootProject.file("key.properties")\
-            if (keystorePropertiesFile.exists()) {\
-                keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\
-            }\
-            
-          }' build.gradle
-          
-          # Thêm signingConfigs nếu chưa có
-          if ! grep -q "signingConfigs" build.gradle; then
-            sed -i '/android {/a \    signingConfigs {\n        release {\n            keyAlias keystoreProperties.keyAlias\n            keyPassword keystoreProperties.keyPassword\n            storeFile file(keystoreProperties.storeFile)\n            storePassword keystoreProperties.storePassword\n        }\n    }' build.gradle
-          fi
-          
-          # Thêm signingConfig vào release build
-          if ! grep -q "signingConfig signingConfigs.release" build.gradle; then
-            sed -i '/release {/a \            signingConfig signingConfigs.release' build.gradle
-          fi
+          cat > build.gradle << 'EOF'
+          plugins {
+              id "com.android.application"
+              id "kotlin-android"
+              id "dev.flutter.flutter-gradle-plugin"
+          }
+
+          def keystoreProperties = new Properties()
+          def keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+
+          android {
+              namespace "com.godroid.go_droid"
+              compileSdkVersion 34
+              ndkVersion flutter.ndkVersion
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+
+              sourceSets {
+                  main.java.srcDirs += 'src/main/kotlin'
+              }
+
+              defaultConfig {
+                  applicationId "com.godroid.go_droid"
+                  minSdkVersion 21
+                  targetSdkVersion 34
+                  versionCode 1
+                  versionName "1.0.0"
+              }
+
+              signingConfigs {
+                  release {
+                      keyAlias keystoreProperties.keyAlias
+                      keyPassword keystoreProperties.keyPassword
+                      storeFile file(keystoreProperties.storeFile)
+                      storePassword keystoreProperties.storePassword
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                      minifyEnabled false
+                      shrinkResources false
+                  }
+              }
+
+              packagingOptions {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+
+          flutter {
+              source '../..'
+          }
+
+          dependencies {}
+          EOF
+          echo "✅ build.gradle overridden with signing config"
 
       - name: Get dependencies
         working-directory: temp_project
@@ -159,7 +196,6 @@ jobs:
         run: |
           echo "🔑 APK signature:"
           keytool -printcert -jarfile temp_project/build/app/outputs/flutter-apk/app-release.apk | grep "SHA-256" || echo "⚠️ APK built successfully"
-          echo ""
           echo "📱 APK file size:"
           ls -lh temp_project/build/app/outputs/flutter-apk/app-release.apk
 

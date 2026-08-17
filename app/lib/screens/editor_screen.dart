@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/app_state.dart';
 import '../models/run_result.dart';
+import '../models/tab_data.dart';
 import '../widgets/code_editor.dart';
 import '../widgets/output_panel.dart';
 import '../widgets/ai_dialog.dart';
@@ -14,15 +15,11 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  final TextEditingController _urlController = TextEditingController();
   RunResult? _result;
   bool _isRunning = false;
+  bool _isGenerating = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _urlController.text = context.read<AppState>().backendUrl;
-  }
+  bool get _isBusy => _isRunning || _isGenerating;
 
   Future<void> _runCode() async {
     final appState = context.read<AppState>();
@@ -31,13 +28,11 @@ class _EditorScreenState extends State<EditorScreen> {
 
     setState(() {
       _isRunning = true;
-      _result = null;
+      // UX FIX: previous result stays on screen (dimmed by the spinner in
+      // the panel header) instead of flashing back to the empty state.
     });
 
-    final url = _urlController.text.trim();
-    if (url != appState.backendUrl) {
-      appState.setBackendUrl(url);
-    }
+    final url = appState.backendUrl;
 
     try {
       final response = await http.post(
@@ -61,14 +56,10 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Future<void> _generateCode(String prompt) async {
     final appState = context.read<AppState>();
-    final url = _urlController.text.trim();
-    if (url != appState.backendUrl) {
-      appState.setBackendUrl(url);
-    }
+    final url = appState.backendUrl;
 
     setState(() {
-      _isRunning = true;
-      _result = null;
+      _isGenerating = true;
     });
 
     try {
@@ -85,8 +76,9 @@ class _EditorScreenState extends State<EditorScreen> {
           name: 'generated_${DateTime.now().millisecondsSinceEpoch}.go',
           code: generatedCode,
         );
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ Code đã được tạo trong tab mới!')),
+          const SnackBar(content: Text('✅ Code đã được tạo trong tab mới!')),
         );
       } else {
         setState(() {
@@ -101,86 +93,66 @@ class _EditorScreenState extends State<EditorScreen> {
         _result = RunResult(error: 'Lỗi kết nối: $e', success: false);
       });
     } finally {
-      setState(() {
-        _isRunning = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isGenerating = false;
+        });
+      }
     }
   }
 
-  void _showRenameDialog(String tabId, String currentName) {
-    final controller = TextEditingController(text: currentName);
-    showDialog(
+  Future<void> _handleCloseTab(TabData tab) async {
+    final appState = context.read<AppState>();
+    if (!tab.isDirty) {
+      appState.closeTab(tab.id);
+      return;
+    }
+    // UX FIX: closing a tab with unsaved changes used to silently discard
+    // them. Now we confirm first.
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Đổi tên file'),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(labelText: 'Tên mới'),
-        ),
+        title: const Text('Đóng tab?'),
+        content: Text('"${tab.name}" có thay đổi chưa lưu. Đóng tab sẽ mất các thay đổi này.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final newName = controller.text.trim();
-              if (newName.isNotEmpty) {
-                context.read<AppState>().renameTab(tabId, newName);
-              }
-              Navigator.pop(ctx);
-            },
-            child: Text('Save'),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Hủy')),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Đóng'),
           ),
         ],
       ),
     );
+    if (confirmed == true) {
+      appState.closeTab(tab.id);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     final appState = context.watch<AppState>();
     final currentTab = appState.currentTab;
 
     return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text('Go Droid'),
+        title: Row(
+          children: [
+            const Text('Go Droid'),
+            if (currentTab?.isDirty ?? false) ...[
+              const SizedBox(width: 8),
+              Icon(Icons.circle, size: 8, color: theme.colorScheme.tertiary),
+            ],
+          ],
+        ),
         elevation: 0,
         actions: [
           IconButton(
-            icon: Icon(Icons.settings),
-            onPressed: () => _showUrlDialog(),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Thanh công cụ
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              border: Border(bottom: BorderSide(color: Colors.grey.shade800)),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _urlController,
-                    decoration: InputDecoration(
-                      labelText: 'Backend URL',
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(Icons.auto_awesome),
-                  tooltip: 'AI Generate',
-                  onPressed: () async {
+            icon: const Icon(Icons.auto_awesome),
+            tooltip: 'AI Generate',
+            onPressed: _isBusy
+                ? null
+                : () async {
                     final prompt = await showDialog<String>(
                       context: context,
                       builder: (_) => AIDialog(),
@@ -189,74 +161,105 @@ class _EditorScreenState extends State<EditorScreen> {
                       _generateCode(prompt);
                     }
                   },
-                ),
-                ElevatedButton.icon(
-                  onPressed: _isRunning ? null : _runCode,
-                  icon: _isRunning
-                      ? SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : Icon(Icons.play_arrow),
-                  label: Text(_isRunning ? 'Running' : 'Run'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ],
-            ),
           ),
-          // Tab Bar
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Cài đặt backend',
+            onPressed: () => _showUrlDialog(),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Tab bar
           Container(
-            height: 40,
+            height: 44,
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              border: Border(bottom: BorderSide(color: Colors.grey.shade800)),
+              color: theme.colorScheme.surfaceContainerLow,
+              border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
             ),
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              itemCount: appState.tabs.length,
-              itemBuilder: (ctx, index) {
-                final tab = appState.tabs[index];
-                final isActive = tab.id == appState.currentTabId;
-                return GestureDetector(
-                  onTap: () => appState.setCurrentTab(tab.id),
-                  onDoubleTap: () => _showRenameDialog(tab.id, tab.name),
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    margin: EdgeInsets.symmetric(horizontal: 2),
-                    decoration: BoxDecoration(
-                      color: isActive ? Theme.of(context).colorScheme.primaryContainer : Colors.transparent,
-                      borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          tab.name,
-                          style: TextStyle(
-                            color: isActive ? Theme.of(context).colorScheme.onPrimaryContainer : Colors.grey,
+            child: Row(
+              children: [
+                Expanded(
+                  child: ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    itemCount: appState.tabs.length,
+                    itemBuilder: (ctx, index) {
+                      final tab = appState.tabs[index];
+                      final isActive = tab.id == appState.currentTabId;
+                      return GestureDetector(
+                        onTap: () => appState.setCurrentTab(tab.id),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          margin: const EdgeInsets.symmetric(horizontal: 3),
+                          decoration: BoxDecoration(
+                            color: isActive ? theme.colorScheme.primaryContainer : Colors.transparent,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.description_outlined,
+                                size: 14,
+                                color: isActive
+                                    ? theme.colorScheme.onPrimaryContainer
+                                    : theme.colorScheme.outline,
+                              ),
+                              const SizedBox(width: 6),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(maxWidth: 140),
+                                child: Text(
+                                  tab.name,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: isActive
+                                        ? theme.colorScheme.onPrimaryContainer
+                                        : theme.colorScheme.onSurfaceVariant,
+                                    fontWeight: isActive ? FontWeight.w600 : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                              if (tab.isDirty) ...[
+                                const SizedBox(width: 6),
+                                Icon(Icons.circle, size: 7, color: theme.colorScheme.tertiary),
+                              ],
+                              if (appState.tabs.length > 1) ...[
+                                const SizedBox(width: 6),
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(10),
+                                  onTap: () => _handleCloseTab(tab),
+                                  child: Icon(
+                                    Icons.close,
+                                    size: 15,
+                                    color: isActive
+                                        ? theme.colorScheme.onPrimaryContainer
+                                        : theme.colorScheme.outline,
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                        if (tab.isDirty) ...[
-                          SizedBox(width: 4),
-                          Icon(Icons.circle, size: 8, color: Colors.orange),
-                        ],
-                        if (appState.tabs.length > 1) ...[
-                          SizedBox(width: 8),
-                          InkWell(
-                            onTap: () => appState.closeTab(tab.id),
-                            child: Icon(Icons.close, size: 16, color: Colors.grey),
-                          ),
-                        ],
-                      ],
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add, size: 20),
+                  tooltip: 'Tab mới',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => appState.addNewTab(),
+                ),
+                const SizedBox(width: 4),
+              ],
             ),
           ),
           // Code editor
           Expanded(
-            flex: 2,
+            flex: 3,
             child: currentTab != null
                 ? CodeEditor(
                     key: ValueKey(currentTab.id),
@@ -265,49 +268,61 @@ class _EditorScreenState extends State<EditorScreen> {
                       appState.updateCode(currentTab.id, newCode);
                     },
                   )
-                : Center(child: Text('Không có tab nào')),
+                : const Center(child: Text('Không có tab nào')),
           ),
           // Output panel
           Expanded(
-            flex: 1,
-            child: OutputPanel(result: _result),
+            flex: 2,
+            child: OutputPanel(result: _result, isRunning: _isRunning),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          appState.addNewTab();
-        },
-        child: Icon(Icons.add),
-        tooltip: 'New Tab',
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: (currentTab == null || _isBusy) ? null : _runCode,
+        icon: _isRunning
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.play_arrow),
+        label: Text(_isRunning ? 'Đang chạy' : 'Run'),
+        backgroundColor: (currentTab == null || _isBusy)
+            ? theme.disabledColor
+            : Colors.green.shade600,
+        foregroundColor: Colors.white,
       ),
     );
   }
 
   void _showUrlDialog() {
-    final controller = TextEditingController(text: _urlController.text);
+    final appState = context.read<AppState>();
+    final controller = TextEditingController(text: appState.backendUrl);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Backend URL'),
+        title: const Text('Backend URL'),
         content: TextField(
           controller: controller,
-          decoration: InputDecoration(labelText: 'URL'),
+          autofocus: true,
+          decoration: const InputDecoration(
+            labelText: 'URL',
+            border: OutlineInputBorder(),
+            hintText: 'http://10.0.2.2:8080',
+          ),
+          keyboardType: TextInputType.url,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel'),
+            child: const Text('Cancel'),
           ),
           ElevatedButton(
             onPressed: () {
-              setState(() {
-                _urlController.text = controller.text;
-                context.read<AppState>().setBackendUrl(controller.text);
-              });
+              appState.setBackendUrl(controller.text.trim());
               Navigator.pop(ctx);
             },
-            child: Text('Save'),
+            child: const Text('Save'),
           ),
         ],
       ),

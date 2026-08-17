@@ -37,6 +37,23 @@ jobs:
           sed -i 's/Go Droid/Go Droid/g' temp_project/ios/Runner/Info.plist
         continue-on-error: true
 
+      - name: Configure network security for Android
+        run: |
+          # Tạo thư mục và file network_security_config.xml
+          mkdir -p temp_project/android/app/src/main/res/xml
+          cat > temp_project/android/app/src/main/res/xml/network_security_config.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="true">10.0.2.2</domain>
+                  <domain includeSubdomains="true">localhost</domain>
+                  <!-- Thêm các domain/IP khác nếu cần -->
+              </domain-config>
+          </network-security-config>
+          EOF
+          # Chèn thuộc tính vào thẻ <application> trong AndroidManifest.xml
+          sed -i '/<application / s|>| android:usesCleartextTraffic="true" android:networkSecurityConfig="@xml/network_security_config" >|' temp_project/android/app/src/main/AndroidManifest.xml
+
       - name: Get dependencies
         working-directory: temp_project
         run: flutter pub get
@@ -61,10 +78,13 @@ jobs:
         with:
           go-version: '1.21'
 
+      - name: Tidy Go modules
+        working-directory: ./Backend
+        run: go mod tidy
+
       - name: Build Backend
         working-directory: ./Backend
         run: |
-          go mod download
           CGO_ENABLED=0 GOOS=linux go build -o go-backend .
 
       - name: Upload Backend artifact

@@ -3,7 +3,10 @@ import 'package:provider/provider.dart';
 import 'screens/editor_screen.dart';
 import 'models/app_state.dart';
 
-void main() => runApp(MyApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(MyApp());
+}
 
 class MyApp extends StatelessWidget {
   @override

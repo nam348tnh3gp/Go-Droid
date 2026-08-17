@@ -21,6 +21,29 @@ class _EditorScreenState extends State<EditorScreen> {
 
   bool get _isBusy => _isRunning || _isGenerating;
 
+  /// AI models often wrap generated code in a markdown fence, e.g.:
+  /// ```go
+  /// package main
+  /// ...
+  /// ```
+  /// This strips that fence (and a leading language tag like "Go", "go",
+  /// "golang") so only the raw code lands in the new tab.
+  String _stripCodeFence(String raw) {
+    var text = raw.trim();
+    final fenceMatch = RegExp(
+      r'^```[ \t]*[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)\r?\n?```[ \t]*$',
+    ).firstMatch(text);
+    if (fenceMatch != null) {
+      text = fenceMatch.group(1) ?? text;
+    } else {
+      // Fallback: strip stray leading/trailing fence lines even if the
+      // overall shape doesn't match (e.g. missing closing fence).
+      text = text.replaceFirst(RegExp(r'^```[ \t]*[a-zA-Z]*[ \t]*\r?\n'), '');
+      text = text.replaceFirst(RegExp(r'\r?\n?```[ \t]*$'), '');
+    }
+    return text.trim();
+  }
+
   Future<void> _runCode() async {
     final appState = context.read<AppState>();
     final currentTab = appState.currentTab;
@@ -71,7 +94,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['code'] != null) {
-        final generatedCode = data['code'];
+        final generatedCode = _stripCodeFence(data['code'] as String);
         appState.addNewTab(
           name: 'generated_${DateTime.now().millisecondsSinceEpoch}.go',
           code: generatedCode,
@@ -99,6 +122,24 @@ class _EditorScreenState extends State<EditorScreen> {
         });
       }
     }
+  }
+
+  /// AI backends often wrap generated code in a markdown fence, e.g.:
+  ///   ```go
+  ///   package main
+  ///   ...
+  ///   ```
+  /// This strips the fence (with or without a language tag) plus any
+  /// leading/trailing blank lines, leaving just the raw source.
+  String _stripCodeFence(String raw) {
+    var text = raw.trim();
+    final fenceMatch = RegExp(
+      r'^```[a-zA-Z0-9_+-]*\s*\n([\s\S]*?)\n?```$',
+    ).firstMatch(text);
+    if (fenceMatch != null) {
+      text = fenceMatch.group(1) ?? text;
+    }
+    return text.trim();
   }
 
   Future<void> _handleCloseTab(TabData tab) async {

@@ -5,12 +5,19 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -32,10 +39,30 @@ jobs:
 
       - name: Change app name to "Go Droid"
         run: |
-          sed -i 's/Go Droid/Go Droid/g' temp_project/pubspec.yaml
-          sed -i 's/Go Droid/Go Droid/g' temp_project/android/app/src/main/AndroidManifest.xml
-          sed -i 's/Go Droid/Go Droid/g' temp_project/ios/Runner/Info.plist
-        continue-on-error: true
+          # Đổi tên trong pubspec.yaml
+          sed -i 's/name:.*/name: go_droid/' temp_project/pubspec.yaml
+          sed -i 's/description:.*/description: "Go Droid - Trình soạn thảo v\u00e0 th\u1ef1c thi Go v\u1edbi t\u00edch h\u1ee3p Gemini AI"/' temp_project/pubspec.yaml
+          
+          # Đổi tên trong AndroidManifest.xml
+          sed -i 's/android:label=".*"/android:label="Go Droid"/' temp_project/android/app/src/main/AndroidManifest.xml
+          
+          # Đổi tên trong strings.xml (nếu có)
+          if [ -f "temp_project/android/app/src/main/res/values/strings.xml" ]; then
+            sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">Go Droid<\/string>/' temp_project/android/app/src/main/res/values/strings.xml
+          else
+            mkdir -p temp_project/android/app/src/main/res/values
+            cat > temp_project/android/app/src/main/res/values/strings.xml << 'EOF'
+            <?xml version="1.0" encoding="utf-8"?>
+            <resources>
+                <string name="app_name">Go Droid</string>
+            </resources>
+            EOF
+          fi
+          
+          # Đổi tên trong iOS Info.plist
+          sed -i 's/<string>.*<\/string>/<string>Go Droid<\/string>/' temp_project/ios/Runner/Info.plist 2>/dev/null || true
+          
+          echo "✅ App name changed to 'Go Droid'"
 
       - name: Add Internet permission
         run: |
@@ -62,6 +89,54 @@ jobs:
             sed -i '/<application / s|>| android:usesCleartextTraffic="true" android:networkSecurityConfig="@xml/network_security_config" >|' $MANIFEST
           fi
 
+      - name: Restore keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          cd temp_project/android/app
+          echo "$KEYSTORE_BASE64" | tr -d '\r\n ' | base64 -d > upload-keystore.jks
+          
+          if [ ! -s upload-keystore.jks ]; then
+            echo "❌ Keystore file is empty!"
+            exit 1
+          fi
+          
+          echo "📏 Keystore size: $(wc -c < upload-keystore.jks) bytes"
+          echo "✅ Keystore restored"
+
+      - name: Create key.properties
+        env:
+          STORE_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          cd temp_project/android
+          cat > key.properties << EOF
+          storePassword=$STORE_PASS
+          keyPassword=$KEY_PASS
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+          echo "✅ key.properties created"
+
+      - name: Configure signing in build.gradle
+        run: |
+          cd temp_project/android/app
+          # Thêm signingConfigs nếu chưa có
+          if ! grep -q "signingConfigs" build.gradle; then
+            sed -i '/android {/a \    signingConfigs {\n        release {\n            keyAlias keystoreProperties.keyAlias\n            keyPassword keystoreProperties.keyPassword\n            storeFile file(keystoreProperties.storeFile)\n            storePassword keystoreProperties.storePassword\n        }\n    }' build.gradle
+          fi
+          
+          # Thêm signingConfig vào release build
+          if ! grep -q "signingConfig signingConfigs.release" build.gradle; then
+            sed -i '/release {/a \            signingConfig signingConfigs.release' build.gradle
+          fi
+          
+          # Thêm keystore properties vào đầu file
+          if ! grep -q "def keystoreProperties" build.gradle; then
+            sed -i '1i def keystoreProperties = new Properties()\ndef keystorePropertiesFile = rootProject.file("key.properties")\nif (keystorePropertiesFile.exists()) {\n    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))\n}\n' build.gradle
+          fi
+
       - name: Get dependencies
         working-directory: temp_project
         run: flutter pub get
@@ -70,10 +145,18 @@ jobs:
         working-directory: temp_project
         run: flutter build apk --release
 
+      - name: Verify APK signature
+        run: |
+          echo "🔑 APK signature:"
+          keytool -printcert -jarfile temp_project/build/app/outputs/flutter-apk/app-release.apk | grep "SHA-256" || echo "⚠️ APK built successfully"
+          echo ""
+          echo "📱 APK file size:"
+          ls -lh temp_project/build/app/outputs/flutter-apk/app-release.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
+          name: go-droid-app-release
           path: temp_project/build/app/outputs/flutter-apk/app-release.apk
 
   build-backend:

@@ -36,14 +36,46 @@ func main() {
     _currentTabId = _tabs.first.id;
   }
 
+  // Tạo tên file duy nhất, tránh trùng lặp
+  String _getUniqueTabName(String baseName) {
+    String nameWithoutExt = baseName;
+    String ext = '';
+    int dotIndex = baseName.lastIndexOf('.');
+    if (dotIndex != -1) {
+      nameWithoutExt = baseName.substring(0, dotIndex);
+      ext = baseName.substring(dotIndex);
+    }
+    Set<String> existingNames = _tabs.map((t) => t.name).toSet();
+    if (!existingNames.contains(baseName)) {
+      return baseName;
+    }
+    int counter = 1;
+    while (true) {
+      String newName = '$nameWithoutExt$counter$ext';
+      if (!existingNames.contains(newName)) {
+        return newName;
+      }
+      counter++;
+    }
+  }
+
   void addNewTab({String? name, String? code}) {
+    final defaultName = 'untitled.go';
+    final finalName = name != null ? _getUniqueTabName(name) : _getUniqueTabName(defaultName);
     final newTab = TabData(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name ?? 'untitled.go',
+      name: finalName,
       code: code ?? defaultCode,
     );
     _tabs.add(newTab);
     _currentTabId = newTab.id;
+    notifyListeners();
+  }
+
+  void renameTab(String id, String newName) {
+    final tab = _tabs.firstWhere((t) => t.id == id);
+    final uniqueName = _getUniqueTabName(newName);
+    tab.name = uniqueName;
     notifyListeners();
   }
 
@@ -83,6 +115,5 @@ func main() {
     notifyListeners();
   }
 
-  // Lấy code của tab hiện tại
   String getCurrentCode() => currentTab?.code ?? '';
 }

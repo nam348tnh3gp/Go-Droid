@@ -3,15 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -25,9 +22,9 @@ type RunRequest struct {
 }
 
 type RunResponse struct {
-	Output   string `json:"output,omitempty"`
-	Error    string `json:"error,omitempty"`
-	Gemini   string `json:"gemini,omitempty"`   // phản hồi từ Gemini nếu có lỗi
+	Output string `json:"output,omitempty"`
+	Error  string `json:"error,omitempty"`
+	Gemini string `json:"gemini,omitempty"` // phản hồi từ Gemini nếu có lỗi
 }
 
 var geminiClient *genai.Client
@@ -44,7 +41,7 @@ func initGemini() {
 		log.Fatalf("Failed to create Gemini client: %v", err)
 	}
 	geminiClient = client
-	geminiModel = client.GenerativeModel("gemini-1.5-flash-latest")
+	geminiModel = client.GenerativeModel("gemini-flash-lite-latest")
 }
 
 func main() {
@@ -59,7 +56,8 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-	r.Run(":" + port)
+	// Thay vì r.Run(":" + port)
+        r.Run("0.0.0.0:" + port)   // Lắng nghe trên tất cả địa chỉ
 }
 
 func handleRun(c *gin.Context) {
@@ -70,7 +68,7 @@ func handleRun(c *gin.Context) {
 	}
 
 	// Tạo thư mục tạm
-	tmpDir, err := ioutil.TempDir("", "gobuild-*")
+	tmpDir, err := os.MkdirTemp("", "gobuild-*")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
 		return
@@ -79,7 +77,7 @@ func handleRun(c *gin.Context) {
 
 	// Ghi file main.go
 	mainGoPath := filepath.Join(tmpDir, "main.go")
-	if err := ioutil.WriteFile(mainGoPath, []byte(req.Code), 0644); err != nil {
+	if err := os.WriteFile(mainGoPath, []byte(req.Code), 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write code"})
 		return
 	}

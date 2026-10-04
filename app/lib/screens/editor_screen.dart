@@ -60,11 +60,17 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _isRunning = true);
 
     final url = appState.backendUrl;
+    final payload = <String, dynamic>{
+      'code': currentTab.code,
+      if (currentTab.goMod != null && currentTab.goMod!.isNotEmpty)
+        'goMod': currentTab.goMod,
+    };
+
     try {
       final response = await http.post(
         Uri.parse('$url/run'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'code': currentTab.code}),
+        body: jsonEncode(payload),
       );
       final data = jsonDecode(response.body);
       if (!mounted) return;
@@ -98,10 +104,39 @@ class _EditorScreenState extends State<EditorScreen> {
       if (!mounted) return;
       if (response.statusCode == 200 && data['code'] != null) {
         final generatedCode = _stripCodeFence(data['code'] as String);
+        // Nếu backend trả kèm goMod thì dùng luôn.
+        final goMod = data['goMod'] is String &&
+                (data['goMod'] as String).trim().isNotEmpty
+            ? data['goMod'] as String
+            : null;
+
         appState.addNewTab(
           name: 'generated_${DateTime.now().millisecondsSinceEpoch}.go',
           code: generatedCode,
+          goMod: goMod,
         );
+
+        // Nếu code có import ngoài mà chưa có goMod, gợi ý luôn.
+        if (goMod == null) {
+          final external = appState.detectExternalImports(generatedCode);
+          if (external.isNotEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Code dùng ${external.length} package ngoài — cần thêm go.mod'),
+                action: SnackBarAction(
+                  label: 'Tạo',
+                  onPressed: () {
+                    final tab = appState.currentTab;
+                    if (tab != null) _editGoModDialog(tab);
+                  },
+                ),
+              ),
+            );
+            return;
+          }
+        }
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('✅ Code đã được tạo trong tab mới!')),
         );
@@ -193,14 +228,102 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  Future<void> _editGoModDialog(TabData tab) async {
+    final appState = context.read<AppState>();
+    final controller = TextEditingController();
+
+    // Nếu tab đã có go.mod → hiển thị nguyên trạng.
+    // Nếu chưa có → sinh skeleton từ import ngoài trong code.
+    if (tab.goMod != null) {
+      controller.text = tab.goMod!;
+    } else {
+      final external = appState.detectExternalImports(tab.code);
+      controller.text = appState.generateGoModSkeleton(external);
+    }
+
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.inventory_2_outlined),
+            SizedBox(width: 8),
+            Text('go.mod'),
+          ],
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Để trống nếu code chỉ dùng stdlib. Backend sẽ tự chạy '
+                '`go mod tidy` để resolve version cụ thể.',
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                maxLines: 12,
+                minLines: 8,
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'module godroid/main\n\ngo 1.21\n',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Hủy'),
+          ),
+          if (tab.goMod != null)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, ''),
+              child: const Text('Xóa go.mod'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, controller.text),
+            child: const Text('Lưu'),
+          ),
+        ],
+      ),
+    );
+
+    if (result != null) {
+      appState.setGoMod(tab.id, result);
+    }
+  }
+
   Future<void> _shareCode() async {
     final tab = context.read<AppState>().currentTab;
     if (tab == null) return;
     try {
       final dir = await getTemporaryDirectory();
+      // Share code dưới dạng file .go; nếu có go.mod, share kèm
+      // dưới dạng text thuần (share_plus không gộp nhiều file vào một
+      // archive được nếu không cài thêm package).
       final file = File('${dir.path}/${tab.name}');
       await file.writeAsString(tab.code);
-      await Share.shareXFiles([XFile(file.path)], subject: tab.name);
+
+      if (tab.goMod != null && tab.goMod!.isNotEmpty) {
+        final goModFile = File('${dir.path}/go.mod');
+        await goModFile.writeAsString(tab.goMod!);
+        await Share.shareXFiles(
+          [XFile(file.path), XFile(goModFile.path)],
+          subject: tab.name,
+        );
+      } else {
+        await Share.shareXFiles([XFile(file.path)], subject: tab.name);
+      }
     } catch (e) {
       await Share.share(tab.code, subject: tab.name);
     }
@@ -210,41 +333,58 @@ class _EditorScreenState extends State<EditorScreen> {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
       withData: true,
+      allowMultiple: true,
     );
     if (result == null || result.files.isEmpty) return;
-    final picked = result.files.single;
 
-    final ext = picked.extension?.toLowerCase() ?? '';
-    if (ext != 'go' && ext != 'txt') {
+    // Cho phép import cặp (main.go + go.mod) cùng lúc.
+    String? goContent;
+    String? goModContent;
+    String? goName;
+
+    for (final picked in result.files) {
+      final ext = picked.extension?.toLowerCase() ?? '';
+      final name = picked.name.toLowerCase();
+
+      String? text;
+      try {
+        if (picked.bytes != null) {
+          text = utf8.decode(picked.bytes!);
+        } else if (picked.path != null) {
+          text = await File(picked.path!).readAsString();
+        }
+      } catch (_) {
+        text = null;
+      }
+      if (text == null) continue;
+
+      if (name == 'go.mod' || ext == 'mod') {
+        goModContent = text;
+      } else if (ext == 'go' || ext == 'txt') {
+        if (goContent == null) {
+          goContent = text;
+          goName = picked.name;
+        }
+      }
+    }
+
+    if (goContent == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Chỉ hỗ trợ import file .go hoặc .txt')),
+        const SnackBar(content: Text('Chưa chọn file .go hoặc .txt')),
       );
       return;
     }
 
-    String? content;
-    try {
-      if (picked.bytes != null) {
-        content = utf8.decode(picked.bytes!);
-      } else if (picked.path != null) {
-        content = await File(picked.path!).readAsString();
-      }
-    } catch (_) {
-      content = null;
-    }
+    final appState = context.read<AppState>();
+    appState.importFile(goName!, goContent, goMod: goModContent);
 
     if (!mounted) return;
-    if (content == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Không thể đọc file đã chọn')),
-      );
-      return;
-    }
-
-    context.read<AppState>().importFile(picked.name, content);
+    final msg = goModContent != null
+        ? 'Đã import "$goName" + go.mod'
+        : 'Đã import "$goName"';
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Đã import "${picked.name}"')),
+      SnackBar(content: Text(msg)),
     );
   }
 
@@ -267,6 +407,11 @@ class _EditorScreenState extends State<EditorScreen> {
 
     final currentTab = appState.currentTab;
 
+    // Cảnh báo: code có import ngoài nhưng chưa khai báo go.mod.
+    final needsGoMod = currentTab != null &&
+        currentTab.goMod == null &&
+        appState.detectExternalImports(currentTab.code).isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         title: Row(
@@ -280,6 +425,21 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
         elevation: 0,
         actions: [
+          if (needsGoMod)
+            IconButton(
+              icon: Icon(
+                Icons.warning_amber,
+                color: theme.colorScheme.tertiary,
+              ),
+              tooltip: 'Code cần go.mod — bấm để tạo',
+              onPressed: () => _editGoModDialog(currentTab),
+            ),
+          if (currentTab?.goMod != null)
+            IconButton(
+              icon: const Icon(Icons.inventory_2_outlined),
+              tooltip: 'Đang dùng go.mod — bấm để chỉnh',
+              onPressed: () => _editGoModDialog(currentTab!),
+            ),
           IconButton(
             icon: _isGenerating
                 ? const SizedBox(
@@ -312,6 +472,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 case 'rename':
                   if (currentTab != null) _renameTabDialog(currentTab);
                   break;
+                case 'gomod':
+                  if (currentTab != null) _editGoModDialog(currentTab);
+                  break;
                 case 'settings':
                   _showUrlDialog();
                   break;
@@ -324,7 +487,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.file_open_outlined),
-                  title: Text('Import file'),
+                  title: Text('Import file (.go/.txt/go.mod)'),
                 ),
               ),
               PopupMenuItem(
@@ -343,6 +506,15 @@ class _EditorScreenState extends State<EditorScreen> {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(Icons.drive_file_rename_outline),
                   title: Text('Đổi tên file'),
+                ),
+              ),
+              PopupMenuItem(
+                value: 'gomod',
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.inventory_2_outlined),
+                  title: Text('Chỉnh go.mod'),
                 ),
               ),
               PopupMenuItem(
@@ -366,8 +538,8 @@ class _EditorScreenState extends State<EditorScreen> {
           const minEditorHeight = 120.0;
           const minOutputHeight = 80.0;
 
-          final available = constraints.maxHeight - tabBarHeight - statusBarHeight;
-          // Đảm bảo cả editor lẫn output đều có chiều cao tối thiểu.
+          final available =
+              constraints.maxHeight - tabBarHeight - statusBarHeight;
           final maxOutput = available - minEditorHeight;
           final minOutput = minOutputHeight;
           final outputHeight =
@@ -480,11 +652,22 @@ class _EditorScreenState extends State<EditorScreen> {
                               color: isActive
                                   ? theme.colorScheme.onPrimaryContainer
                                   : theme.colorScheme.onSurfaceVariant,
-                              fontWeight:
-                                  isActive ? FontWeight.w600 : FontWeight.normal,
+                              fontWeight: isActive
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
                             ),
                           ),
                         ),
+                        if (tab.goMod != null) ...[
+                          const SizedBox(width: 4),
+                          Icon(
+                            Icons.inventory_2_outlined,
+                            size: 11,
+                            color: isActive
+                                ? theme.colorScheme.onPrimaryContainer
+                                : theme.colorScheme.outline,
+                          ),
+                        ],
                         if (tab.isDirty) ...[
                           const SizedBox(width: 6),
                           Icon(Icons.circle,
@@ -523,17 +706,12 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Status bar dưới editor:
-  /// - trái: drag handle + vị trí con trỏ
-  /// - phải: nút giảm/tăng cỡ chữ, toggle wrap
-  /// Cả thanh là một GestureDetector onVerticalDragUpdate để kéo giãn output.
   Widget _buildStatusBar(
       ThemeData theme, AppState appState, double available) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onVerticalDragUpdate: (details) {
         setState(() {
-          // Kéo xuống (dy>0) -> output nhỏ lại.
           final delta = details.delta.dy / available;
           _outputFraction = (_outputFraction - delta).clamp(0.15, 0.75);
         });
@@ -557,7 +735,9 @@ class _EditorScreenState extends State<EditorScreen> {
               ValueListenableBuilder<EditorPosition?>(
                 valueListenable: _cursor,
                 builder: (_, pos, __) => Text(
-                  pos == null ? 'Ln 1, Col 1' : 'Ln ${pos.line}, Col ${pos.column}',
+                  pos == null
+                      ? 'Ln 1, Col 1'
+                      : 'Ln ${pos.line}, Col ${pos.column}',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.outline,
                     fontFeatures: const [FontFeature.tabularFigures()],
@@ -570,8 +750,8 @@ class _EditorScreenState extends State<EditorScreen> {
                 tooltip: 'Giảm cỡ chữ',
                 onPressed: appState.editorFontSize <= 10
                     ? null
-                    : () => appState
-                        .setEditorFontSize(appState.editorFontSize - 1),
+                    : () =>
+                        appState.setEditorFontSize(appState.editorFontSize - 1),
               ),
               Text(
                 appState.editorFontSize.toInt().toString(),
@@ -583,13 +763,14 @@ class _EditorScreenState extends State<EditorScreen> {
                 tooltip: 'Tăng cỡ chữ',
                 onPressed: appState.editorFontSize >= 28
                     ? null
-                    : () => appState
-                        .setEditorFontSize(appState.editorFontSize + 1),
+                    : () =>
+                        appState.setEditorFontSize(appState.editorFontSize + 1),
               ),
               const SizedBox(width: 4),
               _SmallIconBtn(
                 icon: Icons.wrap_text,
-                tooltip: appState.wordWrap ? 'Tắt word wrap' : 'Bật word wrap',
+                tooltip:
+                    appState.wordWrap ? 'Tắt word wrap' : 'Bật word wrap',
                 active: appState.wordWrap,
                 onPressed: () => appState.setWordWrap(!appState.wordWrap),
               ),

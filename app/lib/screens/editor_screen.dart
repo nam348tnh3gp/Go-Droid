@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_code_editor/flutter_code_editor.dart';
 import 'package:provider/provider.dart';
 import '../models/app_state.dart';
 import '../models/run_result.dart';
 import '../models/tab_data.dart';
 import '../widgets/code_editor.dart';
+import '../widgets/editor_tab_bar.dart';
+import '../widgets/editor_status_bar.dart';
+import '../widgets/editor_search_bar.dart';
 import '../widgets/output_panel.dart';
 import '../widgets/ai_dialog.dart';
 import 'package:http/http.dart' as http;
@@ -22,21 +26,32 @@ class _EditorScreenState extends State<EditorScreen> {
   RunResult? _result;
   bool _isRunning = false;
   bool _isGenerating = false;
+  bool _isFormatting = false;
+  bool _isSearchOpen = false;
 
-  /// Tỉ lệ chiều cao vùng Output so với phần body còn lại (đã trừ tab bar).
   double _outputFraction = 0.38;
 
-  /// Vị trí con trỏ — dùng ValueNotifier để không rebuild cả screen.
   final ValueNotifier<EditorPosition?> _cursor =
       ValueNotifier<EditorPosition?>(null);
 
-  bool get _isBusy => _isRunning || _isGenerating;
+  /// Controller hiện tại của CodeEditor. EditorScreen không tạo trực tiếp
+  /// mà để CodeEditor báo ra qua `controllerNotifier`. Search bar đọc
+  /// notifier này.
+  final ValueNotifier<CodeController?> _activeController =
+      ValueNotifier<CodeController?>(null);
+
+  bool get _isBusy => _isRunning || _isGenerating || _isFormatting;
 
   @override
   void dispose() {
     _cursor.dispose();
+    _activeController.dispose();
     super.dispose();
   }
+
+  // -------------------------------------------------------------------------
+  // Actions
+  // -------------------------------------------------------------------------
 
   String _stripCodeFence(String raw) {
     var text = raw.trim();
@@ -81,10 +96,55 @@ class _EditorScreenState extends State<EditorScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _result =
-            RunResult(error: 'Không thể kết nối đến backend: $e', success: false);
+        _result = RunResult(
+            error: 'Không thể kết nối đến backend: $e', success: false);
         _isRunning = false;
       });
+    }
+  }
+
+  Future<void> _formatCode() async {
+    final appState = context.read<AppState>();
+    final currentTab = appState.currentTab;
+    if (currentTab == null) return;
+
+    setState(() => _isFormatting = true);
+    final url = appState.backendUrl;
+
+    try {
+      final response = await http.post(
+        Uri.parse('$url/format'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'code': currentTab.code}),
+      );
+      final data = jsonDecode(response.body);
+      if (!mounted) return;
+
+      if (response.statusCode == 200 && data['code'] is String) {
+        final formatted = data['code'] as String;
+        appState.replaceCode(currentTab.id, formatted);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✨ Đã format code'),
+            duration: Duration(seconds: 1),
+          ),
+        );
+      } else {
+        final err = data['error']?.toString() ?? 'Format thất bại';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Lỗi format: $err'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi kết nối: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isFormatting = false);
     }
   }
 
@@ -104,7 +164,6 @@ class _EditorScreenState extends State<EditorScreen> {
       if (!mounted) return;
       if (response.statusCode == 200 && data['code'] != null) {
         final generatedCode = _stripCodeFence(data['code'] as String);
-        // Nếu backend trả kèm goMod thì dùng luôn.
         final goMod = data['goMod'] is String &&
                 (data['goMod'] as String).trim().isNotEmpty
             ? data['goMod'] as String
@@ -116,7 +175,6 @@ class _EditorScreenState extends State<EditorScreen> {
           goMod: goMod,
         );
 
-        // Nếu code có import ngoài mà chưa có goMod, gợi ý luôn.
         if (goMod == null) {
           final external = appState.detectExternalImports(generatedCode);
           if (external.isNotEmpty) {
@@ -232,8 +290,6 @@ class _EditorScreenState extends State<EditorScreen> {
     final appState = context.read<AppState>();
     final controller = TextEditingController();
 
-    // Nếu tab đã có go.mod → hiển thị nguyên trạng.
-    // Nếu chưa có → sinh skeleton từ import ngoài trong code.
     if (tab.goMod != null) {
       controller.text = tab.goMod!;
     } else {
@@ -308,9 +364,6 @@ class _EditorScreenState extends State<EditorScreen> {
     if (tab == null) return;
     try {
       final dir = await getTemporaryDirectory();
-      // Share code dưới dạng file .go; nếu có go.mod, share kèm
-      // dưới dạng text thuần (share_plus không gộp nhiều file vào một
-      // archive được nếu không cài thêm package).
       final file = File('${dir.path}/${tab.name}');
       await file.writeAsString(tab.code);
 
@@ -337,7 +390,6 @@ class _EditorScreenState extends State<EditorScreen> {
     );
     if (result == null || result.files.isEmpty) return;
 
-    // Cho phép import cặp (main.go + go.mod) cùng lúc.
     String? goContent;
     String? goModContent;
     String? goName;
@@ -398,6 +450,10 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Build
+  // -------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -406,8 +462,6 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!appState.isLoaded) return const _LoadingScreen();
 
     final currentTab = appState.currentTab;
-
-    // Cảnh báo: code có import ngoài nhưng chưa khai báo go.mod.
     final needsGoMod = currentTab != null &&
         currentTab.goMod == null &&
         appState.detectExternalImports(currentTab.code).isNotEmpty;
@@ -427,10 +481,8 @@ class _EditorScreenState extends State<EditorScreen> {
         actions: [
           if (needsGoMod)
             IconButton(
-              icon: Icon(
-                Icons.warning_amber,
-                color: theme.colorScheme.tertiary,
-              ),
+              icon: Icon(Icons.warning_amber,
+                  color: theme.colorScheme.tertiary),
               tooltip: 'Code cần go.mod — bấm để tạo',
               onPressed: () => _editGoModDialog(currentTab),
             ),
@@ -440,6 +492,24 @@ class _EditorScreenState extends State<EditorScreen> {
               tooltip: 'Đang dùng go.mod — bấm để chỉnh',
               onPressed: () => _editGoModDialog(currentTab!),
             ),
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: 'Tìm & thay thế',
+            onPressed: (currentTab == null)
+                ? null
+                : () => setState(() => _isSearchOpen = !_isSearchOpen),
+          ),
+          IconButton(
+            icon: _isFormatting
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.auto_fix_high),
+            tooltip: _isFormatting ? 'Đang format...' : 'Format code (gofmt)',
+            onPressed: (currentTab == null || _isBusy) ? null : _formatCode,
+          ),
           IconButton(
             icon: _isGenerating
                 ? const SizedBox(
@@ -454,9 +524,10 @@ class _EditorScreenState extends State<EditorScreen> {
           IconButton(
             icon: const Icon(Icons.save_outlined),
             tooltip: 'Lưu',
-            onPressed: (currentTab != null && currentTab.isDirty && !_isBusy)
-                ? _saveCurrentTab
-                : null,
+            onPressed:
+                (currentTab != null && currentTab.isDirty && !_isBusy)
+                    ? _saveCurrentTab
+                    : null,
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
@@ -541,16 +612,32 @@ class _EditorScreenState extends State<EditorScreen> {
           final available =
               constraints.maxHeight - tabBarHeight - statusBarHeight;
           final maxOutput = available - minEditorHeight;
-          final minOutput = minOutputHeight;
           final outputHeight =
-              (available * _outputFraction).clamp(minOutput, maxOutput);
+              (available * _outputFraction).clamp(minOutputHeight, maxOutput);
           final editorHeight = available - outputHeight;
 
           return Column(
             children: [
               SizedBox(
                 height: tabBarHeight,
-                child: _buildTabBar(theme, appState),
+                child: EditorTabBar(
+                  onClose: _handleCloseTab,
+                  onRename: _renameTabDialog,
+                ),
+              ),
+              // Search bar — chỉ hiện khi có controller (tránh race khi
+              // vừa đổi tab và controller chưa kịp init).
+              ValueListenableBuilder<CodeController?>(
+                valueListenable: _activeController,
+                builder: (_, controller, __) {
+                  if (!_isSearchOpen || controller == null) {
+                    return const SizedBox.shrink();
+                  }
+                  return EditorSearchBar(
+                    controller: controller,
+                    onClose: () => setState(() => _isSearchOpen = false),
+                  );
+                },
               ),
               SizedBox(
                 height: editorHeight,
@@ -561,6 +648,7 @@ class _EditorScreenState extends State<EditorScreen> {
                         fontSize: appState.editorFontSize,
                         wrap: appState.wordWrap,
                         cursorNotifier: _cursor,
+                        controllerNotifier: _activeController,
                         onChanged: (newCode) {
                           appState.updateCode(currentTab.id, newCode);
                         },
@@ -569,7 +657,13 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
               SizedBox(
                 height: statusBarHeight,
-                child: _buildStatusBar(theme, appState, available),
+                child: EditorStatusBar(
+                  cursor: _cursor,
+                  available: available,
+                  outputFraction: _outputFraction,
+                  onOutputFractionChange: (v) =>
+                      setState(() => _outputFraction = v),
+                ),
               ),
               SizedBox(
                 height: outputHeight,
@@ -597,186 +691,6 @@ class _EditorScreenState extends State<EditorScreen> {
             ? theme.disabledColor
             : Colors.green.shade600,
         foregroundColor: Colors.white,
-      ),
-    );
-  }
-
-  Widget _buildTabBar(ThemeData theme, AppState appState) {
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerLow,
-        border: Border(
-            bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-              itemCount: appState.tabs.length,
-              itemBuilder: (ctx, index) {
-                final tab = appState.tabs[index];
-                final isActive = tab.id == appState.currentTabId;
-                return GestureDetector(
-                  onTap: () => appState.setCurrentTab(tab.id),
-                  onLongPress: () => _renameTabDialog(tab),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 150),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    decoration: BoxDecoration(
-                      color: isActive
-                          ? theme.colorScheme.primaryContainer
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.description_outlined,
-                          size: 14,
-                          color: isActive
-                              ? theme.colorScheme.onPrimaryContainer
-                              : theme.colorScheme.outline,
-                        ),
-                        const SizedBox(width: 6),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 140),
-                          child: Text(
-                            tab.name,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: isActive
-                                  ? theme.colorScheme.onPrimaryContainer
-                                  : theme.colorScheme.onSurfaceVariant,
-                              fontWeight: isActive
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                            ),
-                          ),
-                        ),
-                        if (tab.goMod != null) ...[
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.inventory_2_outlined,
-                            size: 11,
-                            color: isActive
-                                ? theme.colorScheme.onPrimaryContainer
-                                : theme.colorScheme.outline,
-                          ),
-                        ],
-                        if (tab.isDirty) ...[
-                          const SizedBox(width: 6),
-                          Icon(Icons.circle,
-                              size: 7, color: theme.colorScheme.tertiary),
-                        ],
-                        if (appState.tabs.length > 1) ...[
-                          const SizedBox(width: 6),
-                          InkWell(
-                            borderRadius: BorderRadius.circular(10),
-                            onTap: () => _handleCloseTab(tab),
-                            child: Icon(
-                              Icons.close,
-                              size: 15,
-                              color: isActive
-                                  ? theme.colorScheme.onPrimaryContainer
-                                  : theme.colorScheme.outline,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.add, size: 20),
-            tooltip: 'Tab mới',
-            visualDensity: VisualDensity.compact,
-            onPressed: () => appState.addNewTab(),
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusBar(
-      ThemeData theme, AppState appState, double available) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onVerticalDragUpdate: (details) {
-        setState(() {
-          final delta = details.delta.dy / available;
-          _outputFraction = (_outputFraction - delta).clamp(0.15, 0.75);
-        });
-      },
-      child: MouseRegion(
-        cursor: SystemMouseCursors.resizeRow,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: theme.colorScheme.surfaceContainerLow,
-            border: Border(
-              top: BorderSide(color: theme.colorScheme.outlineVariant),
-              bottom: BorderSide(color: theme.colorScheme.outlineVariant),
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.drag_handle,
-                  size: 16, color: theme.colorScheme.outline),
-              const SizedBox(width: 6),
-              ValueListenableBuilder<EditorPosition?>(
-                valueListenable: _cursor,
-                builder: (_, pos, __) => Text(
-                  pos == null
-                      ? 'Ln 1, Col 1'
-                      : 'Ln ${pos.line}, Col ${pos.column}',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ),
-              const Spacer(),
-              _SmallIconBtn(
-                icon: Icons.text_decrease,
-                tooltip: 'Giảm cỡ chữ',
-                onPressed: appState.editorFontSize <= 10
-                    ? null
-                    : () =>
-                        appState.setEditorFontSize(appState.editorFontSize - 1),
-              ),
-              Text(
-                appState.editorFontSize.toInt().toString(),
-                style: theme.textTheme.labelSmall
-                    ?.copyWith(color: theme.colorScheme.outline),
-              ),
-              _SmallIconBtn(
-                icon: Icons.text_increase,
-                tooltip: 'Tăng cỡ chữ',
-                onPressed: appState.editorFontSize >= 28
-                    ? null
-                    : () =>
-                        appState.setEditorFontSize(appState.editorFontSize + 1),
-              ),
-              const SizedBox(width: 4),
-              _SmallIconBtn(
-                icon: Icons.wrap_text,
-                tooltip:
-                    appState.wordWrap ? 'Tắt word wrap' : 'Bật word wrap',
-                active: appState.wordWrap,
-                onPressed: () => appState.setWordWrap(!appState.wordWrap),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -812,34 +726,6 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _SmallIconBtn extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onPressed;
-  final bool active;
-
-  const _SmallIconBtn({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-    this.active = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return IconButton(
-      icon: Icon(icon, size: 16),
-      tooltip: tooltip,
-      onPressed: onPressed,
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-      color: active ? theme.colorScheme.primary : null,
     );
   }
 }

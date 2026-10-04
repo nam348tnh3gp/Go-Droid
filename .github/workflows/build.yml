@@ -1,10 +1,6 @@
 name: Build Flutter App
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:
@@ -152,7 +148,6 @@ jobs:
       - name: Override build.gradle with correct signing config
         run: |
           cd temp_project/android/app
-          # Dùng heredoc không có dấu nháy để mở rộng biến
           cat > build.gradle << EOF
           plugins {
               id "com.android.application"

@@ -41,7 +41,16 @@ class _CodeEditorState extends State<CodeEditor> {
   @override
   void initState() {
     super.initState();
-    _controller = CodeController(text: widget.code, language: go);
+
+    // ❗ Tắt toàn bộ auto‑modifier để thư viện không tự chèn ký tự vào code.
+    // Điều này ngăn lỗi gofmt "expected ';', found ..." do thư viện chèn
+    // ngoặc/quote thừa trong comment hoặc string literal.
+    _controller = CodeController(
+      text: widget.code,
+      language: go,
+      modifiers: const [], // ← thay đổi duy nhất
+    );
+
     _controller.addListener(_handleChange);
 
     // Sync controller ra ngoài. Set sync ở đây an toàn vì widget con

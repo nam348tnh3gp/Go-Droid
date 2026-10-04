@@ -1,7 +1,7 @@
 name: go_droid
 description: "Go Droid - Trình soạn thảo và thực thi Go với tích hợp Gemini AI"
 publish_to: 'none'
-version: 1.0.0+2
+version: 1.0.0+3
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

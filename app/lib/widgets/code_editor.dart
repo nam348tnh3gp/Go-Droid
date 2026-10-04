@@ -16,12 +16,18 @@ class CodeEditor extends StatefulWidget {
   final bool wrap;
   final ValueNotifier<EditorPosition?>? cursorNotifier;
 
+  /// Khi widget mount, state sẽ set notifier này về controller của nó.
+  /// Khi unmount, reset về null (nếu vẫn đang giữ controller đó).
+  /// Dùng để widget khác (search bar) truy cập controller an toàn.
+  final ValueNotifier<CodeController?>? controllerNotifier;
+
   const CodeEditor({
     required this.code,
     required this.onChanged,
     this.fontSize = 14,
     this.wrap = true,
     this.cursorNotifier,
+    this.controllerNotifier,
     Key? key,
   }) : super(key: key);
 
@@ -37,8 +43,45 @@ class _CodeEditorState extends State<CodeEditor> {
     super.initState();
     _controller = CodeController(text: widget.code, language: go);
     _controller.addListener(_handleChange);
-    // Báo vị trí ban đầu sau frame đầu tiên.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _reportCursor());
+
+    // Sync controller ra ngoài. Set sync ở đây an toàn vì widget con
+    // chưa build xong — listeners chỉ schedule rebuild cho frame sau.
+    widget.controllerNotifier?.value = _controller;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reportCursor();
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant CodeEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Phát hiện code bị thay đổi từ BÊN NGOÀI (Format, tab switch giữ
+    // nguyên widget). Nếu user gõ, _controller.text đã == widget.code
+    // rồi, nên check này không trigger.
+    if (widget.code != _controller.text) {
+      final sel = _controller.selection;
+      _controller.removeListener(_handleChange);
+      _controller.text = widget.code;
+      _controller.addListener(_handleChange);
+
+      // Giữ con trỏ trong bounds mới.
+      if (sel.isValid) {
+        final max = widget.code.length;
+        _controller.selection = TextSelection(
+          baseOffset: sel.baseOffset.clamp(0, max),
+          extentOffset: sel.extentOffset.clamp(0, max),
+        );
+      }
+      _reportCursor();
+    }
+
+    // Nếu callback đổi (widget mới được reuse), rebind notifier.
+    if (oldWidget.controllerNotifier != widget.controllerNotifier) {
+      oldWidget.controllerNotifier?.value = null;
+      widget.controllerNotifier?.value = _controller;
+    }
   }
 
   void _handleChange() {
@@ -61,13 +104,10 @@ class _CodeEditorState extends State<CodeEditor> {
   }
 
   @override
-  void didUpdateWidget(covariant CodeEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Khi bật/tắt wrap hoặc đổi font-size ta không cần đụng controller.
-  }
-
-  @override
   void dispose() {
+    if (widget.controllerNotifier?.value == _controller) {
+      widget.controllerNotifier?.value = null;
+    }
     _controller.removeListener(_handleChange);
     _controller.dispose();
     super.dispose();

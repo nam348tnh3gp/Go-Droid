@@ -5,8 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'tab_data.dart';
 
 class AppState extends ChangeNotifier {
-  // ... (giữ nguyên phần khai báo cũ)
-
   List<TabData> _tabs = [];
   String _currentTabId = '';
   String _backendUrl = 'http://10.0.2.2:8080';
@@ -57,10 +55,83 @@ func main() {
     _restoreState();
   }
 
-  // ... (_restoreState, _persist, _schedulePersist, _getUniqueTabName
-  //      giữ NGUYÊN như file hiện tại)
+  // ---------------------------------------------------------------------------
+  // Persistence
+  // ---------------------------------------------------------------------------
 
-  // ============ Tab operations ============
+  Future<void> _restoreState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawTabs = prefs.getString(_prefsTabsKey);
+      if (rawTabs != null) {
+        final decoded = jsonDecode(rawTabs) as List<dynamic>;
+        final restored = decoded
+            .map((e) => TabData.fromJson(e as Map<String, dynamic>))
+            .toList();
+        if (restored.isNotEmpty) {
+          _tabs = restored;
+          final savedCurrent = prefs.getString(_prefsCurrentTabKey);
+          _currentTabId =
+              (savedCurrent != null && _tabs.any((t) => t.id == savedCurrent))
+                  ? savedCurrent
+                  : _tabs.first.id;
+        }
+      }
+      final savedUrl = prefs.getString(_prefsBackendUrlKey);
+      if (savedUrl != null && savedUrl.isNotEmpty) {
+        _backendUrl = savedUrl;
+      }
+      _editorFontSize = prefs.getDouble(_prefsFontSizeKey) ?? 14.0;
+      _wordWrap = prefs.getBool(_prefsWordWrapKey) ?? true;
+    } catch (_) {
+      // dữ liệu hỏng → dùng mặc định
+    } finally {
+      _isLoaded = true;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawTabs = jsonEncode(_tabs.map((t) => t.toJson()).toList());
+      await prefs.setString(_prefsTabsKey, rawTabs);
+      await prefs.setString(_prefsCurrentTabKey, _currentTabId);
+      await prefs.setString(_prefsBackendUrlKey, _backendUrl);
+      await prefs.setDouble(_prefsFontSizeKey, _editorFontSize);
+      await prefs.setBool(_prefsWordWrapKey, _wordWrap);
+    } catch (_) {
+      // lưu thất bại không crash app
+    }
+  }
+
+  void _schedulePersist() {
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(milliseconds: 600), _persist);
+  }
+
+  String _getUniqueTabName(String baseName, {String? ignoreId}) {
+    String nameWithoutExt = baseName;
+    String ext = '';
+    int dotIndex = baseName.lastIndexOf('.');
+    if (dotIndex != -1) {
+      nameWithoutExt = baseName.substring(0, dotIndex);
+      ext = baseName.substring(dotIndex);
+    }
+    Set<String> existingNames =
+        _tabs.where((t) => t.id != ignoreId).map((t) => t.name).toSet();
+    if (!existingNames.contains(baseName)) return baseName;
+    int counter = 1;
+    while (true) {
+      String newName = '$nameWithoutExt$counter$ext';
+      if (!existingNames.contains(newName)) return newName;
+      counter++;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tab operations
+  // ---------------------------------------------------------------------------
 
   void addNewTab({String? name, String? code, String? goMod}) {
     final defaultName = 'untitled.go';
@@ -162,7 +233,9 @@ func main() {
   }
 
   /// PERF: Không notify mỗi ký tự. Chỉ notify khi cờ `isDirty` chuyển
-  /// false -> true để tab bar hiện dấu chấm.
+  /// false -> true để tab bar hiện dấu chấm. Nội dung code được mutate
+  /// trực tiếp vào TabData; khi cần (Run/Save/switch tab) đọc trực tiếp
+  /// `currentTab.code` là có bản mới nhất.
   void updateCode(String id, String newCode) {
     final tab = _tabs.firstWhere((t) => t.id == id);
     if (tab.code == newCode) return;
@@ -192,7 +265,9 @@ func main() {
     _persist();
   }
 
-  // ============ Settings ============
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
 
   void setBackendUrl(String url) {
     if (_backendUrl != url) {
@@ -219,8 +294,11 @@ func main() {
     }
   }
 
-  // ============ go.mod support (giữ nguyên đợt trước) ============
+  // ---------------------------------------------------------------------------
+  // go.mod support
+  // ---------------------------------------------------------------------------
 
+  /// Cập nhật go.mod cho tab. `null` hoặc chuỗi rỗng → xoá.
   void setGoMod(String id, String? content) {
     final tab = _tabs.firstWhere((t) => t.id == id);
     final normalized =
@@ -233,6 +311,7 @@ func main() {
     _persist();
   }
 
+  /// Phát hiện import package ngoài stdlib từ code.
   List<String> detectExternalImports(String code) {
     final re = RegExp(
       r'^\s*(?:import\s+)?(?:[\w.]+\s+)?"([^"]+)"',
@@ -265,6 +344,7 @@ func main() {
     return modules.toList();
   }
 
+  /// Sinh nội dung go.mod tối thiểu từ danh sách module.
   String generateGoModSkeleton(
     List<String> modules, {
     String moduleName = 'godroid/main',

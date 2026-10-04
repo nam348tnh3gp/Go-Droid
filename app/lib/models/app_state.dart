@@ -8,9 +8,9 @@ class AppState extends ChangeNotifier {
   List<TabData> _tabs = [];
   String _currentTabId = '';
   String _backendUrl = 'http://10.0.2.2:8080';
+  double _editorFontSize = 14.0;
+  bool _wordWrap = true;
 
-  // UI reads this to show a loading state until saved tabs are restored,
-  // so we never briefly flash a blank/default tab on top of real data.
   bool _isLoaded = false;
   bool get isLoaded => _isLoaded;
 
@@ -24,6 +24,8 @@ class AppState extends ChangeNotifier {
     }
   }
   String get backendUrl => _backendUrl;
+  double get editorFontSize => _editorFontSize;
+  bool get wordWrap => _wordWrap;
 
   static const String defaultCode = '''
 package main
@@ -38,8 +40,10 @@ func main() {
   static const _prefsTabsKey = 'go_droid_tabs';
   static const _prefsCurrentTabKey = 'go_droid_current_tab';
   static const _prefsBackendUrlKey = 'go_droid_backend_url';
+  static const _prefsFontSizeKey = 'go_droid_font_size';
+  static const _prefsWordWrapKey = 'go_droid_word_wrap';
 
-  Timer? _debounce;
+  Timer? _persistDebounce;
 
   AppState() {
     _tabs.add(TabData(
@@ -51,8 +55,6 @@ func main() {
     _restoreState();
   }
 
-  // Khôi phục các tab đã lưu từ lần dùng trước, nếu có. Nếu không tìm thấy
-  // hoặc dữ liệu lỗi, giữ nguyên tab mặc định đã tạo ở constructor.
   Future<void> _restoreState() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -65,17 +67,20 @@ func main() {
         if (restored.isNotEmpty) {
           _tabs = restored;
           final savedCurrent = prefs.getString(_prefsCurrentTabKey);
-          _currentTabId = (savedCurrent != null && _tabs.any((t) => t.id == savedCurrent))
-              ? savedCurrent
-              : _tabs.first.id;
+          _currentTabId =
+              (savedCurrent != null && _tabs.any((t) => t.id == savedCurrent))
+                  ? savedCurrent
+                  : _tabs.first.id;
         }
       }
       final savedUrl = prefs.getString(_prefsBackendUrlKey);
       if (savedUrl != null && savedUrl.isNotEmpty) {
         _backendUrl = savedUrl;
       }
+      _editorFontSize = prefs.getDouble(_prefsFontSizeKey) ?? 14.0;
+      _wordWrap = prefs.getBool(_prefsWordWrapKey) ?? true;
     } catch (_) {
-      // Dữ liệu lưu trước đó bị hỏng/không đọc được -> bỏ qua, dùng mặc định.
+      // dữ liệu hỏng → dùng mặc định
     } finally {
       _isLoaded = true;
       notifyListeners();
@@ -89,20 +94,18 @@ func main() {
       await prefs.setString(_prefsTabsKey, rawTabs);
       await prefs.setString(_prefsCurrentTabKey, _currentTabId);
       await prefs.setString(_prefsBackendUrlKey, _backendUrl);
+      await prefs.setDouble(_prefsFontSizeKey, _editorFontSize);
+      await prefs.setBool(_prefsWordWrapKey, _wordWrap);
     } catch (_) {
-      // Lưu thất bại không nên làm crash app; dữ liệu vẫn còn trong bộ nhớ.
+      // lưu thất bại không crash app
     }
   }
 
-  // Gõ code sẽ gọi hàm này rất thường xuyên -> gộp (debounce) các lần ghi
-  // xuống đĩa để tránh ghi liên tục theo từng ký tự.
   void _schedulePersist() {
-    _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 600), _persist);
+    _persistDebounce?.cancel();
+    _persistDebounce = Timer(const Duration(milliseconds: 600), _persist);
   }
 
-  // Tạo tên file duy nhất, tránh trùng lặp. [ignoreId] dùng khi đổi tên để
-  // không tự so trùng với chính tab đang đổi tên.
   String _getUniqueTabName(String baseName, {String? ignoreId}) {
     String nameWithoutExt = baseName;
     String ext = '';
@@ -111,26 +114,21 @@ func main() {
       nameWithoutExt = baseName.substring(0, dotIndex);
       ext = baseName.substring(dotIndex);
     }
-    Set<String> existingNames = _tabs
-        .where((t) => t.id != ignoreId)
-        .map((t) => t.name)
-        .toSet();
-    if (!existingNames.contains(baseName)) {
-      return baseName;
-    }
+    Set<String> existingNames =
+        _tabs.where((t) => t.id != ignoreId).map((t) => t.name).toSet();
+    if (!existingNames.contains(baseName)) return baseName;
     int counter = 1;
     while (true) {
       String newName = '$nameWithoutExt$counter$ext';
-      if (!existingNames.contains(newName)) {
-        return newName;
-      }
+      if (!existingNames.contains(newName)) return newName;
       counter++;
     }
   }
 
   void addNewTab({String? name, String? code}) {
     final defaultName = 'untitled.go';
-    final finalName = name != null ? _getUniqueTabName(name) : _getUniqueTabName(defaultName);
+    final finalName =
+        name != null ? _getUniqueTabName(name) : _getUniqueTabName(defaultName);
     final newTab = TabData(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: finalName,
@@ -142,8 +140,6 @@ func main() {
     _persist();
   }
 
-  // Tạo tab mới từ nội dung file được import từ máy, giữ tên file gốc
-  // (chỉ đổi nếu trùng với tab đang mở).
   void importFile(String fileName, String content) {
     final uniqueName = _getUniqueTabName(fileName);
     final newTab = TabData(
@@ -186,12 +182,18 @@ func main() {
     }
   }
 
+  /// PERF: Không notify mỗi ký tự nữa — chỉ notify đúng một lần khi cờ
+  /// `isDirty` chuyển false -> true (để tab bar hiện dấu chấm). Bản thân
+  /// nội dung code đã nằm trong controller của editor; khi cần (Run/Save/
+  /// switch tab) chỉ việc đọc trực tiếp `currentTab.code` là có bản mới
+  /// nhất — vì ta mutate thẳng vào object TabData.
   void updateCode(String id, String newCode) {
     final tab = _tabs.firstWhere((t) => t.id == id);
     if (tab.code == newCode) return;
+    final wasDirty = tab.isDirty;
     tab.code = newCode;
     tab.isDirty = true;
-    notifyListeners();
+    if (!wasDirty) notifyListeners();
     _schedulePersist();
   }
 
@@ -203,13 +205,28 @@ func main() {
     }
   }
 
-  // Lưu tường minh (người dùng bấm nút Save): xóa cờ "chưa lưu" và ghi
-  // ngay xuống bộ nhớ máy (không chờ debounce).
+  void setEditorFontSize(double size) {
+    final clamped = size.clamp(10.0, 28.0);
+    if (_editorFontSize != clamped) {
+      _editorFontSize = clamped;
+      notifyListeners();
+      _schedulePersist();
+    }
+  }
+
+  void setWordWrap(bool value) {
+    if (_wordWrap != value) {
+      _wordWrap = value;
+      notifyListeners();
+      _schedulePersist();
+    }
+  }
+
   void saveTab(String id) {
     final tab = _tabs.firstWhere((t) => t.id == id);
     tab.isDirty = false;
     notifyListeners();
-    _debounce?.cancel();
+    _persistDebounce?.cancel();
     _persist();
   }
 
@@ -217,7 +234,7 @@ func main() {
 
   @override
   void dispose() {
-    _debounce?.cancel();
+    _persistDebounce?.cancel();
     super.dispose();
   }
 }

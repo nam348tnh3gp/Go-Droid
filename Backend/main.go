@@ -19,6 +19,10 @@ import (
 	"google.golang.org/api/option"
 )
 
+// ---------------------------------------------------------------------------
+// Request / Response types
+// ---------------------------------------------------------------------------
+
 type RunRequest struct {
 	Code  string `json:"code"`
 	GoMod string `json:"goMod,omitempty"`
@@ -40,7 +44,24 @@ type GenerateResponse struct {
 	Error string `json:"error,omitempty"`
 }
 
+type FormatRequest struct {
+	Code string `json:"code"`
+}
+
+type FormatResponse struct {
+	Code  string `json:"code,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// Globals
+// ---------------------------------------------------------------------------
+
 var geminiModel *genai.GenerativeModel
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
 
 func initGemini() {
 	apiKey := os.Getenv("GEMINI_API_KEY")
@@ -63,6 +84,7 @@ func main() {
 
 	r.POST("/run", handleRun)
 	r.POST("/generate", handleGenerate)
+	r.POST("/format", handleFormat)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -75,7 +97,7 @@ func main() {
 }
 
 // ---------------------------------------------------------------------------
-// /run
+// /run — build & execute user code
 // ---------------------------------------------------------------------------
 
 func handleRun(c *gin.Context) {
@@ -116,11 +138,7 @@ func handleRun(c *gin.Context) {
 	}
 	log.Printf("📝 go.mod:\n%s", goModContent)
 
-	// Env chung cho mọi lệnh Go trong workspace này.
-	// - GOFLAGS=-mod=mod để cho phép ghi go.mod/go.sum.
-	// - GOPROXY mặc định để tải module.
-	// - GOMODCACHE cố định để cache giữa các request (nhanh hơn).
-	// - CGO_ENABLED=0 để build tĩnh, không cần gcc.
+	// Env chung cho mọi lệnh Go trong workspace.
 	gomodCache := os.Getenv("GOMODCACHE")
 	if gomodCache == "" {
 		gomodCache = filepath.Join(os.TempDir(), "godroid-gomodcache")
@@ -139,7 +157,6 @@ func handleRun(c *gin.Context) {
 	}
 
 	// 4) `go mod tidy` — resolve dependency, tạo go.sum.
-	//    Timeout dài cho lần đầu tải module.
 	tidyCtx, tidyCancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer tidyCancel()
 
@@ -160,7 +177,7 @@ func handleRun(c *gin.Context) {
 		return
 	}
 
-	// 5) `go build .` — dùng module context (không phải `go build main.go`).
+	// 5) `go build .`
 	buildCtx, buildCancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 	defer buildCancel()
 
@@ -203,7 +220,7 @@ func handleRun(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
-// /generate
+// /generate — Gemini code generation
 // ---------------------------------------------------------------------------
 
 func handleGenerate(c *gin.Context) {
@@ -341,7 +358,43 @@ func extractFence(s, fence string) string {
 }
 
 // ---------------------------------------------------------------------------
-// Gemini helper
+// /format — gofmt
+// ---------------------------------------------------------------------------
+
+func handleFormat(c *gin.Context) {
+	var req FormatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, FormatResponse{Error: "invalid request"})
+		return
+	}
+
+	if strings.TrimSpace(req.Code) == "" {
+		c.JSON(http.StatusOK, FormatResponse{Code: ""})
+		return
+	}
+
+	cmd := exec.Command("gofmt")
+	cmd.Stdin = strings.NewReader(req.Code)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		log.Printf("❌ gofmt: %s", msg)
+		c.JSON(http.StatusBadRequest, FormatResponse{Error: msg})
+		return
+	}
+
+	c.JSON(http.StatusOK, FormatResponse{Code: stdout.String()})
+}
+
+// ---------------------------------------------------------------------------
+// Gemini helper cho lỗi runtime
 // ---------------------------------------------------------------------------
 
 func callGemini(errorMsg, code string) string {
@@ -382,7 +435,7 @@ Hãy giải thích nguyên nhân và đề xuất cách sửa lỗi một cách 
 }
 
 // ---------------------------------------------------------------------------
-// Command runner — CHỈ 1 hàm duy nhất, signature rõ ràng.
+// Command runner — CHỈ 1 hàm duy nhất.
 // ---------------------------------------------------------------------------
 
 // runCmd chạy `name args...` trong `dir` với env bổ sung.

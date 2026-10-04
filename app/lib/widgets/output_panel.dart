@@ -6,7 +6,8 @@ class OutputPanel extends StatelessWidget {
   final RunResult? result;
   final bool isRunning;
 
-  const OutputPanel({this.result, this.isRunning = false, Key? key}) : super(key: key);
+  const OutputPanel({this.result, this.isRunning = false, Key? key})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -26,20 +27,23 @@ class OutputPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header bar: label the panel and offer a copy action.
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
               color: theme.colorScheme.surfaceContainerLow,
-              border: Border(bottom: BorderSide(color: theme.colorScheme.outlineVariant)),
+              border: Border(
+                  bottom:
+                      BorderSide(color: theme.colorScheme.outlineVariant)),
             ),
             child: Row(
               children: [
-                Icon(Icons.terminal, size: 16, color: theme.colorScheme.outline),
+                Icon(Icons.terminal,
+                    size: 16, color: theme.colorScheme.outline),
                 const SizedBox(width: 6),
                 Text(
                   'Output',
-                  style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.labelMedium
+                      ?.copyWith(color: theme.colorScheme.outline),
                 ),
                 const Spacer(),
                 if (isRunning)
@@ -56,7 +60,10 @@ class OutputPanel extends StatelessWidget {
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: copyText));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Đã sao chép'), duration: Duration(seconds: 1)),
+                        const SnackBar(
+                          content: Text('Đã sao chép'),
+                          duration: Duration(seconds: 1),
+                        ),
                       );
                     },
                   ),
@@ -77,9 +84,20 @@ class OutputPanel extends StatelessWidget {
   Widget _buildBody(BuildContext context, ThemeData theme) {
     if (result == null) {
       return Center(
-        child: Text(
-          isRunning ? 'Đang chạy code...' : 'Chạy code để xem kết quả',
-          style: TextStyle(color: theme.colorScheme.outline),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isRunning ? Icons.hourglass_top : Icons.play_circle_outline,
+              size: 32,
+              color: theme.colorScheme.outline,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isRunning ? 'Đang chạy code...' : 'Nhấn Run để xem kết quả',
+              style: TextStyle(color: theme.colorScheme.outline),
+            ),
+          ],
         ),
       );
     }
@@ -91,24 +109,41 @@ class OutputPanel extends StatelessWidget {
           if (result!.success) ...[
             Row(
               children: [
-                Icon(Icons.check_circle, size: 16, color: Colors.green.shade400),
+                Icon(Icons.check_circle,
+                    size: 16, color: Colors.green.shade400),
                 const SizedBox(width: 6),
-                Text('Thành công',
-                    style: TextStyle(color: Colors.green.shade400, fontWeight: FontWeight.bold)),
+                Text(
+                  'Thành công',
+                  style: TextStyle(
+                    color: Colors.green.shade400,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 6),
             SelectableText(
-              (result!.output?.isNotEmpty ?? false) ? result!.output! : '(không có output)',
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13, height: 1.4),
+              (result!.output?.isNotEmpty ?? false)
+                  ? result!.output!
+                  : '(không có output)',
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                height: 1.4,
+              ),
             ),
           ] else ...[
             Row(
               children: [
                 Icon(Icons.error, size: 16, color: theme.colorScheme.error),
                 const SizedBox(width: 6),
-                Text('Lỗi',
-                    style: TextStyle(color: theme.colorScheme.error, fontWeight: FontWeight.bold)),
+                Text(
+                  'Lỗi',
+                  style: TextStyle(
+                    color: theme.colorScheme.error,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 6),
@@ -123,12 +158,17 @@ class OutputPanel extends StatelessWidget {
             ),
             if (result!.gemini != null && result!.gemini!.isNotEmpty) ...[
               const Divider(height: 20),
-              Row(
+              const Row(
                 children: [
                   Icon(Icons.auto_awesome, size: 16, color: Colors.blueAccent),
-                  const SizedBox(width: 6),
-                  const Text('Gemini gợi ý',
-                      style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                  SizedBox(width: 6),
+                  Text(
+                    'Gemini gợi ý',
+                    style: TextStyle(
+                      color: Colors.blueAccent,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 6),

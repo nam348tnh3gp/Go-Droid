@@ -23,6 +23,7 @@ class AppState extends ChangeNotifier {
       return _tabs.isNotEmpty ? _tabs.first : null;
     }
   }
+
   String get backendUrl => _backendUrl;
   double get editorFontSize => _editorFontSize;
   bool get wordWrap => _wordWrap;
@@ -125,7 +126,7 @@ func main() {
     }
   }
 
-  void addNewTab({String? name, String? code}) {
+  void addNewTab({String? name, String? code, String? goMod}) {
     final defaultName = 'untitled.go';
     final finalName =
         name != null ? _getUniqueTabName(name) : _getUniqueTabName(defaultName);
@@ -133,6 +134,7 @@ func main() {
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: finalName,
       code: code ?? defaultCode,
+      goMod: goMod,
     );
     _tabs.add(newTab);
     _currentTabId = newTab.id;
@@ -140,12 +142,13 @@ func main() {
     _persist();
   }
 
-  void importFile(String fileName, String content) {
+  void importFile(String fileName, String content, {String? goMod}) {
     final uniqueName = _getUniqueTabName(fileName);
     final newTab = TabData(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: uniqueName,
       code: content,
+      goMod: goMod,
     );
     _tabs.add(newTab);
     _currentTabId = newTab.id;
@@ -228,6 +231,87 @@ func main() {
     notifyListeners();
     _persistDebounce?.cancel();
     _persist();
+  }
+
+  // ---------------------------------------------------------------
+  // go.mod support
+  // ---------------------------------------------------------------
+
+  /// Cập nhật go.mod cho tab. `null` hoặc chuỗi rỗng → xoá (về chế độ
+  /// single-file, backend sẽ tự tạo skeleton).
+  void setGoMod(String id, String? content) {
+    final tab = _tabs.firstWhere((t) => t.id == id);
+    final normalized =
+        (content == null || content.trim().isEmpty) ? null : content;
+    if (tab.goMod == normalized) return;
+    tab.goMod = normalized;
+    tab.isDirty = true;
+    notifyListeners();
+    _persistDebounce?.cancel();
+    _persist();
+  }
+
+  /// Phát hiện import package ngoài stdlib từ code (heuristic đơn giản,
+  /// không parse AST). Trả về danh sách module path root, ví dụ:
+  /// "github.com/google/uuid", "golang.org/x/sync".
+  List<String> detectExternalImports(String code) {
+    // Bắt mọi dòng có dạng: [import] [alias] "path"
+    // (khớp cả import block — mỗi dòng là `    "path"` hoặc `alias "path"`)
+    final re = RegExp(
+      r'^\s*(?:import\s+)?(?:[\w.]+\s+)?"([^"]+)"',
+      multiLine: true,
+    );
+    final modules = <String>{};
+    for (final m in re.allMatches(code)) {
+      final path = m.group(1)!;
+      if (path.isEmpty) continue;
+      final parts = path.split('/');
+      // Stdlib: segment đầu không có dấu chấm (fmt, os, net/http...).
+      if (!parts.first.contains('.')) continue;
+
+      // Module root heuristic:
+      // - github/gitlab/bitbucket: 3 segment
+      // - host khác (golang.org, k8s.io...): 2 segment
+      final host = parts.first.toLowerCase();
+      if (host.contains('github.com') ||
+          host.contains('gitlab.com') ||
+          host.contains('bitbucket.org')) {
+        if (parts.length >= 3) {
+          // Xử lý version suffix /vN ở cuối (vd: .../uuid/v2)
+          if (parts.length >= 4 &&
+              RegExp(r'^v\d+$').hasMatch(parts[3]) &&
+              !parts[2].startsWith('v')) {
+            modules.add('${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}');
+          } else {
+            modules.add('${parts[0]}/${parts[1]}/${parts[2]}');
+          }
+        }
+      } else if (parts.length >= 2) {
+        modules.add('${parts[0]}/${parts[1]}');
+      }
+    }
+    return modules.toList();
+  }
+
+  /// Sinh nội dung go.mod tối thiểu từ danh sách module. Version để
+  /// "latest" — backend sẽ chạy `go mod tidy` để resolve version thật.
+  String generateGoModSkeleton(
+    List<String> modules, {
+    String moduleName = 'godroid/main',
+  }) {
+    final buf = StringBuffer()
+      ..writeln('module $moduleName')
+      ..writeln()
+      ..writeln('go 1.21');
+    if (modules.isNotEmpty) {
+      buf.writeln();
+      buf.writeln('require (');
+      for (final m in modules) {
+        buf.writeln('\t$m latest');
+      }
+      buf.writeln(')');
+    }
+    return buf.toString();
   }
 
   String getCurrentCode() => currentTab?.code ?? '';
